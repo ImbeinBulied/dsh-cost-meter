@@ -1262,11 +1262,11 @@
     }
 
     /** 额度窗口行(Go 与 Coding Plan 共用):无百分比的文本窗口显示为纯文本行。 */
-    const quotaWindowRow = (t, label, win, direction, main, key = label) => {
+    const quotaWindowRow = (t, label, win, direction, main, key = label, locale) => {
       if (typeof win?.percent !== 'number') {
         return el('div', { key, className: 'cm-go-row' + (main ? ' main' : '') },
           el('span', { className: 'cm-go-label' }, label),
-          el('span', { className: 'cm-go-num' }, typeof win?.text === 'string' ? win.text : '—'))
+          el('span', { className: 'cm-go-num' }, typeof win?.text === 'string' ? textWinLoc(win.text, locale) : '—'))
       }
       const percent = Math.max(0, Math.min(100, Number(win.percent) || 0))
       const barView = simpleBarByDirection(percent, direction)
@@ -1487,7 +1487,7 @@
         ? el('p', { className: 'cm-note' }, t('goQuotaDisabledNote'))
         : goQuota.status === 'ok'
           ? el('div', { className: 'cm-go-list' },
-      goOrder.map(k => quotaWindowRow(t, t(goLabelOf(k)), goWinOf(k), barDirectionOf(config, 'go'), k === mainKey)),
+            goOrder.map(k => quotaWindowRow(t, t(goLabelOf(k)), goWinOf(k), barDirectionOf(config, 'go'), k === mainKey, undefined, resolveLocale(config))),
             el('div', { className: 'cm-go-time' }, t('goQuotaFetchedAt', {
               time: goQuota.fetchedAt > 0 ? new Date(goQuota.fetchedAt).toLocaleTimeString() : '—',
             })))
@@ -1589,6 +1589,8 @@
       const loginRequired = planId === 'qwen' && config.codingPlans?.qwen?.quotaSource === 'bailian'
         && cfgEntry.quotaSource === 'bailian' && live.quotaSource === 'bailian' && live.loginRequired === true
       const [busy, msg, doRefresh] = useQuotaRefresh(t, () => loginRequired ? api.loginCodingPlan(planId) : api.refreshCodingPlan(planId))
+      // 窗口显示选择器存 localStorage(不进配置协议),用一个独立计数器驱动按钮状态重渲染。
+      const [, bumpPick] = useState(0)
       const setPlan = (field, value) => {
         if (draft === null) return
         const base = draft.codingPlans ?? config.codingPlans ?? {}
@@ -1641,7 +1643,7 @@
                   wide: true,
                   direction: barDirectionOf(config, 'plan'),
                 })
-                : Object.entries(windows).map(([name, win]) => quotaWindowRow(t, name.replace(/_/g, ' '), win, barDirectionOf(config, 'plan'), false, name)))
+                : Object.entries(windows).map(([name, win]) => quotaWindowRow(t, name.replace(/_/g, ' '), win, barDirectionOf(config, 'plan'), false, name, resolveLocale(config))))
               : el('div', { className: 'cm-bal-line' }, t('codingPlanNotQueried')),
             el('div', { className: 'cm-go-time' }, t('goQuotaFetchedAt', {
               time: live.fetchedAt > 0 ? new Date(live.fetchedAt).toLocaleTimeString() : '—',
@@ -1675,7 +1677,31 @@
             el('option', { value: 'settings' }, t('balanceSettings')),
             el('option', { value: 'both' }, t('balanceBoth')),
             el('option', { value: 'off' }, t('off'))),
-          el('span', { className: 'cm-hint' }, t('codingPlanDisplayNote'))),
+          el('span', { className: 'cm-hint' }, t('codingPlanDisplayNote')),
+          live.windows !== null && typeof live.windows === 'object' && Object.keys(live.windows).length > 0
+            ? el('div', { className: 'cm-field' },
+                el('label', null, t('cmPickLabel')),
+                el('div', { className: 'cm-pick-row' }, Object.keys(live.windows).map(name => {
+                  const selected = windowPickOf(planId)
+                  const on = selected === null ? null : selected === 'all' ? true : selected.includes(name)
+                  return el('button', {
+                    key: name,
+                    type: 'button',
+                    className: 'cm-btn small cm-pick' + (on === true ? ' cm-pick-on' : on === false ? ' cm-pick-off' : ''),
+                    title: t('cmPickToggleHint'),
+                    onClick: () => {
+                      const current = windowPickOf(planId)
+                      const keys = current === null || current === 'all' ? Object.keys(live.windows) : current.slice()
+                      const next = keys.includes(name) ? keys.filter(k => k !== name) : [...keys, name]
+                      const ordered = next.slice().sort((a, b) => Object.keys(live.windows).indexOf(a) - Object.keys(live.windows).indexOf(b))
+                      // 空选择与全选都等于默认,存 null(与既有持久化口径一致)。
+                      windowPickSet(planId, ordered.length === 0 || ordered.length === Object.keys(live.windows).length ? null : ordered.join(','))
+                      bumpPick(v => v + 1)
+                    },
+                  }, codingPlanWindowLabel(name, t), on === null ? ' ·' : on ? ' ✓' : ' ✕')
+                })),
+                el('span', { className: 'cm-hint' }, t('cmPickNote')))
+            : null),
         // 刷新间隔(issue #33):进程内缓存过期分钟数,1-1440,保存后生效;
         // 本地估算无缓存间隔；千问 CLI 使用可配置的查询间隔。
         planId !== 'scnet' && (planId !== 'qwen' || (cfgEntry.quotaSource ?? 'local') !== 'local') ? el('div', { className: 'cm-field' },

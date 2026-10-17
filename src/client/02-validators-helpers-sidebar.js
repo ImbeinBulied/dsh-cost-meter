@@ -2570,6 +2570,60 @@
           wide === false ? rail : body))
     }
 
+    const windowPickKey = 'dsh-cost-meter.windowPick'
+
+    /** 解析单家厂商已保存的窗口显示选择:null(默认)| 'all' | 非空窗口键数组。 */
+    function windowPickOf(planId, storage = window.localStorage) {
+      try {
+        const raw = storage.getItem(windowPickKey)
+        if (!raw) return null
+        const all = JSON.parse(raw)
+        const value = all?.[planId]
+        if (typeof value !== 'string') return null
+        const trimmed = value.trim()
+        if (trimmed.length === 0) return null
+        if (trimmed.toLowerCase() === 'all') return 'all'
+        const parts = trimmed.split(',').map(s => s.trim()).filter(s => s.length > 0)
+        return parts.length > 0 ? parts : null
+      } catch {
+        return null
+      }
+    }
+
+    /** 写入单家的窗口选择:null/undefined 删除该键;其余按既有持久化字符串('all' 或 'k1,k2')写入。 */
+    function windowPickSet(planId, selection, storage = window.localStorage) {
+      try {
+        const raw = storage.getItem(windowPickKey)
+        let all = {}
+        if (raw) {
+          try {
+            const parsed = JSON.parse(raw)
+            if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) all = parsed
+          } catch {}
+        }
+        if (selection === null || selection === undefined) delete all[planId]
+        else all[planId] = selection
+        storage.setItem(windowPickKey, JSON.stringify(all))
+      } catch {}
+    }
+
+    /** 按已保存的选择过滤窗口条目:未选择/全选 → 原样;未知键丢弃,选择为空 → 原样(回退默认)。 */
+    function windowPickEntries(entries, planId, storage = window.localStorage) {
+      const pick = windowPickOf(planId, storage)
+      if (pick === null || pick === 'all') return entries
+      const byKey = new Map(entries)
+      const out = []
+      for (const key of pick) {
+        if (byKey.has(key)) { out.push([key, byKey.get(key)]); byKey.delete(key) }
+      }
+      return out.length > 0 ? out : entries
+    }
+
+    /** 已知的中文余额前缀按当前界面语言渲染(en 时换算为 Balance)。 */
+    function textWinLoc(value, locale) {
+      return typeof value !== 'string' || locale !== 'en' ? value : value.replace(/^余额\s*/, 'Balance ')
+    }
+
     /** 通用 Coding Plan 侧边栏卡片(issue #31):每窗口一行进度条;文本窗口(余额等)整行文本。 */
     function codingPlanWindowLabel(name, t) {
       if (name === 'fiveHour' || name === '5h') return '5h'
@@ -2591,7 +2645,9 @@
       const rowDef = CODING_PLAN_ROWS.find(r => r.id === id)
       if (!rowDef || !live || live.status !== 'ok') return null
       const windows = live.windows !== null && typeof live.windows === 'object' ? live.windows : {}
-      const entries = Object.entries(windows)
+      // CommandCode 池窗口可能多于两个:默认仍展示全部(月度窗口保持可发现),
+      // 仅显式选择(非 commandcode 卡片)时按选择过滤。
+      const entries = id === 'commandcode' ? Object.entries(windows) : windowPickEntries(Object.entries(windows), id)
       if (entries.length === 0) return null
       const pctOf = win => win !== null && typeof win === 'object' && typeof win.percent === 'number'
         ? Math.max(0, Math.min(100, Math.round(Number(win.percent) || 0))) : null
@@ -2601,7 +2657,7 @@
         const pct = pctOf(win)
         if (pct === null) {
           return el('div', { key: name, className: 'cm-mm-row wide' },
-            el('span', { className: 'cm-mm-text' }, typeof win?.text === 'string' ? win.text : '—'))
+            el('span', { className: 'cm-mm-text' }, typeof win?.text === 'string' ? textWinLoc(win.text, resolveLocale(state.config)) : '—'))
         }
         const level = pct >= 100 ? 'over' : pct >= 80 ? 'warn' : 'ok'
         const barView = simpleBarByDirection(pct, planDirection)
@@ -2614,7 +2670,7 @@
       const detailParts = entries.map(([name, win]) => {
         const pct = pctOf(win)
         const reset = miniMaxResetText(win, t)
-        const value = pct === null ? (typeof win?.text === 'string' ? win.text : '—')
+        const value = pct === null ? (typeof win?.text === 'string' ? textWinLoc(win.text, resolveLocale(state.config)) : '—')
           : quotaValueText(simpleBarByDirection(pct, planDirection).label, planDirection, t)
         return codingPlanWindowLabel(name, t) + ' ' + value + (reset ? ' · ' + reset : '')
       })
@@ -2624,8 +2680,8 @@
       const pcts = entries.map(([, win]) => pctOf(win)).filter(p => p !== null)
       const level = pcts.some(p => p >= 100) ? 'over' : pcts.some(p => p >= 80) ? 'warn' : 'ok'
       const railText = pcts.length > 0
-        ? pcts.slice(0, 2).map(p => simpleBarByDirection(p, planDirection).label + '%').join(' ')
-        : (typeof entries[0][1]?.text === 'string' ? entries[0][1].text : '—')
+        ? pcts.slice(0, windowPickOf(id) !== null ? pcts.length : 2).map(p => simpleBarByDirection(p, planDirection).label + '%').join(' ')
+        : (typeof entries[0][1]?.text === 'string' ? textWinLoc(entries[0][1].text, resolveLocale(state.config)) : '—')
       return el(Tooltip, { label: el('span', { style: { whiteSpace: 'pre-line' } }, detail), side: 'right', delayMs: 300 },
         el('div', { ...hoverProps, className: 'cm-bbox cm-mm clickable' + (level === 'ok' ? '' : ' ' + level) + (wide === false ? ' rail' : '') + (refresh.busy ? ' busy' : ''), ...clickableRefreshProps(refresh.busy, refresh.run) },
           wide === false
@@ -2827,7 +2883,7 @@
           const live = state.codingPlans?.[rowDef.id]
           if (config.codingPlans?.[rowDef.id]?.enabled !== true || !live || live.status !== 'ok') continue
           const windows = live.windows !== null && typeof live.windows === 'object' ? live.windows : {}
-          const entries = Object.entries(windows)
+          const entries = windowPickEntries(Object.entries(windows), rowDef.id)
           if (entries.length === 0) continue
           const vendor = STRIP_VENDOR_SHORT[rowDef.id] ?? rowDef.id
           const segs = []
@@ -2841,13 +2897,13 @@
             const pct = win !== null && typeof win === 'object' && typeof win.percent === 'number'
               ? Math.max(0, Math.min(100, Math.round(Number(win.percent) || 0))) : null
             detailParts.push(label + ' '
-              + (pct === null ? (typeof win?.text === 'string' ? win.text : '—') : pct + '%') + reset)
+              + (pct === null ? (typeof win?.text === 'string' ? textWinLoc(win.text, resolveLocale(config)) : '—') : pct + '%') + reset)
             if (pct === null) {
               // 文本窗口(余额等无百分比的量):以文本段展示,不占进度条名额。
-              segs.push({ name, pct: null, text: typeof win?.text === 'string' ? win.text : '—' })
+              segs.push({ name, pct: null, text: typeof win?.text === 'string' ? textWinLoc(win.text, resolveLocale(config)) : '—' })
               continue
             }
-            if (shown >= 2) continue // 每家最多两个百分比段,更多窗口进悬停提示
+            if (windowPickOf(rowDef.id) === null && shown >= 2) continue // 未显式选择时每家最多两个百分比段,更多窗口进悬停提示
             shown += 1
             segs.push({ name, pct: Math.round(simpleBarByDirection(pct, barDirectionOf(config, 'plan')).width) })
             worst = Math.max(worst, pct >= 100 ? 2 : pct >= 80 ? 1 : 0)
