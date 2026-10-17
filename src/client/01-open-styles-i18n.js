@@ -343,6 +343,20 @@ window.__ModuleLoader__.load({
       '.cm-footer-stack{display:flex;flex:none;order:-1;flex-direction:column;gap:6px;width:100%;min-width:0;max-width:100%;align-items:stretch;box-sizing:border-box}',
       '.cm-footer-stack.rail{align-items:center;order:1}',
       '.cm-footer-stack .cm-bbox{width:100%;min-width:0}',
+      // 紧凑卡片(patch-compact-cards):卡内边距/间距收紧,图框间距仍保持 6px;
+      // 判定色由 .cm-verdict 承载(此前 warn/over 类无任何样式,判定恒为灰字)。
+      '.cm-footer-stack .cm-bbox:not(.cm-bbox-pair){padding:6px 10px;gap:4px}',
+      '.cm-footer-stack .cm-bbox>.cm-bbox-bar{margin-top:0}',
+      '.cm-verdict{font-weight:600}',
+      '.cm-verdict.warn{color:var(--dsw-alias-state-warn-primary)}',
+      '.cm-verdict.over{color:var(--dsw-alias-state-error-primary)}',
+      // 打磨(patch-polish-cards):标题让位给数值(12/15px),标题不再被 115px 上限截断;
+      // 卡内进度条 5px、明细行 11px(让「速率 · 判定」并入一行)。:not(.simple) 让
+      // 简化模式稍后的同权重规则继续生效;:not(.cm-bbox-pair) 保住预算合并卡的 4px 条。
+      '.cm-footer-stack .cm-bbox-head>.cm-bbox-label{font-size:12px;max-width:none;flex:1 1 auto;min-width:0}',
+      '.cm-footer-stack .cm-bbox-head>.cm-bbox-pct{font-size:15px;flex:none;white-space:nowrap}',
+      '.cm-footer-stack:not(.simple) .cm-bbox:not(.cm-bbox-pair)>.cm-bbox-bar{height:5px}',
+      '.cm-footer-stack .cm-bbox-line{font-size:11px}',
       '.cm-footer-stack .cm-foot{width:100%;box-sizing:border-box}',
       '.cm-footer-stack.compact .cm-bbox{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:12px;row-gap:2px;align-items:center}',
       '.cm-footer-stack.compact .cm-bbox>*{grid-column:1/-1}',

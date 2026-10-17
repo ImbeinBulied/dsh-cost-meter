@@ -2289,7 +2289,7 @@
       const shortOf = k => k === 'rolling' ? t('goShortRolling') : k === 'weekly' ? t('goShortWeekly') : t('goShortMonthly')
       const others = ['rolling', 'weekly', 'monthly'].filter(k => k !== mainKey)
       const resets = mainWin !== null && typeof mainWin?.resetsAt === 'string' && mainWin.resetsAt.length > 0
-        ? t('goResetAt', { time: new Date(mainWin.resetsAt).toLocaleString() })
+        ? miniMaxResetText(mainWin, t)
         : ''
       const detail = config?.goQuota?.detail !== false
       // 条形方向(issue #67):默认已用方向;剩余方向时填充与标签显示剩余%。
@@ -2307,7 +2307,18 @@
             ? el(Fragment, null,
               el('div', { className: 'cm-bbox-line cm-num' },
                 others.map(k => shortOf(k) + ' ' + pctOf(goQuota[k])).join(' · ')),
-              resets ? el('div', { className: 'cm-bbox-line' }, resets) : null)
+              resets ? el('div', { className: 'cm-bbox-line' }, resets) : null,
+              (() => {
+                const monthly = goQuota.monthly ?? null // pinned: the monthly window drives pace/status, not mainKey
+                const paceLine = paceOf(monthly?.percent, monthly?.resetsAt)
+                const R = Date.parse(typeof monthly?.resetsAt === 'string' ? monthly.resetsAt : '')
+                const verdict = Number.isFinite(R) ? paceStatusOf(monthly?.percent, R - 30 * 864e5, R) : null
+                if (paceLine === null && verdict === null) return null
+                return el('div', { className: 'cm-bbox-line cm-num' },
+                  paceLine,
+                  paceLine !== null && verdict !== null ? ' · ' : null,
+                  verdict === null ? null : verdict.lvl === 'ok' ? verdict.t : el('span', { className: 'cm-verdict ' + verdict.lvl }, verdict.t))
+              })())
             : null),
       }
     }
@@ -2558,12 +2569,26 @@
         ...clickRefreshTipLines(t, refresh),
       ].filter(Boolean).join('\n')
       const body = el(Fragment, null,
-        el('div', { className: 'cm-mm-title' }, t('codexQuotaTitle')),
-        view.row)
+        el('div', { className: 'cm-bbox-head' },
+          el('span', { className: 'cm-bbox-label' }, t('codexQuotaTitle')),
+          el('span', { className: 'cm-bbox-pct cm-num' }, view.label === null ? '—' : view.label + '%')),
+        el('div', { className: 'cm-bbox-bar' },
+          el('div', { className: 'cm-bbox-fill', style: { width: simpleBarByDirection(view.pct, direction).width + '%' } })),
+        miniMaxResetText(win, t) ? el('div', { className: 'cm-bbox-line' }, miniMaxResetText(win, t)) : null,
+        (() => {
+          const paceLine = paceOf(view.pct, win?.resetsAt)
+          const R = Date.parse(typeof win?.resetsAt === 'string' ? win.resetsAt : '')
+          const verdict = Number.isFinite(R) ? paceStatusOf(view.pct, R - 7 * 864e5, R) : null
+          if (paceLine === null && verdict === null) return null
+          return el('div', { className: 'cm-bbox-line cm-num' },
+            paceLine,
+            paceLine !== null && verdict !== null ? ' · ' : null,
+            verdict === null ? null : verdict.lvl === 'ok' ? verdict.t : el('span', { className: 'cm-verdict ' + verdict.lvl }, verdict.t))
+        })())
       const rail = el('div', { className: 'cm-bbox-rail cm-num' }, view.label === null ? '—' : view.label + '%')
       return el(Tooltip, { label: el('span', { style: { whiteSpace: 'pre-line' } }, detail), side: 'right', delayMs: 300 },
         el('div', {
-          ...hoverProps, className: 'cm-bbox cm-mm clickable' + (view.level === 'ok' ? '' : ' ' + view.level)
+          ...hoverProps, className: 'cm-bbox clickable' + (view.level === 'ok' ? '' : ' ' + view.level)
             + (wide === false ? ' rail' : '') + (refresh.busy ? ' busy' : ''),
           ...clickableRefreshProps(refresh.busy, refresh.run),
         },
@@ -2624,6 +2649,24 @@
       return typeof value !== 'string' || locale !== 'en' ? value : value.replace(/^余额\s*/, 'Balance ')
     }
 
+    // ── 用量速度/进度判定(patch-quota-cards 的 cmPace/cmPaceStatus)──────────────
+    /** Usage pace: remaining percent per day until the reset. The countdown lives on the reset line. */
+    function paceOf(pct, resetsAtIso, now = Date.now()) {
+      const ms = Date.parse(typeof resetsAtIso === 'string' ? resetsAtIso : '') - now
+      if (typeof pct !== 'number' || !Number.isFinite(ms) || ms <= 0) return null
+      return 'Pace ' + ((100 - pct) / (ms / 864e5)).toFixed(1) + '%/day'
+    }
+
+    /** Over/under-pace verdict against the real period boundaries; unknown period → null. */
+    function paceStatusOf(pct, startMs, endMs, now = Date.now()) {
+      if (typeof pct !== 'number' || !Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs || now < startMs || now >= endMs) return null
+      const delta = pct - 100 * (now - startMs) / (endMs - startMs)
+      if (Math.abs(delta) < 1) return { t: 'On pace', lvl: 'ok' }
+      return delta < 0
+        ? { t: 'Under pace by ' + Math.abs(delta).toFixed(1) + '%', lvl: 'ok' }
+        : { t: 'Over pace by ' + delta.toFixed(1) + '%', lvl: delta >= 5 ? 'over' : 'warn' }
+    }
+
     /** 通用 Coding Plan 侧边栏卡片(issue #31):每窗口一行进度条;文本窗口(余额等)整行文本。 */
     function codingPlanWindowLabel(name, t) {
       if (name === 'fiveHour' || name === '5h') return '5h'
@@ -2653,6 +2696,61 @@
         ? Math.max(0, Math.min(100, Math.round(Number(win.percent) || 0))) : null
       // 条形方向(issue #67):Plan 卡默认已用方向,剩余方向时填充与标签显示剩余%。
       const planDirection = barDirectionOf(state.config, 'plan')
+      // CommandCode 专用视图(patch-quota-cards 的 cc-card):主窗口固定优先取月度已知百分比
+      // (card-selection 已让 CC 卡片忽略窗口选择器,月度窗口因此保持可发现),判定只用官方
+      // periodStartAt/resetsAt(缺失即不出判定,不猜周期);其余百分比窗口合并为一行摘要,
+      // 其重置倒计时与余额文本同时存在时并成一行表头,月度自身的重置行单独一行。
+      const ccWin = id === 'commandcode'
+        ? (entries.find(([name, win]) => name === 'monthly' && pctOf(win) !== null)
+          ?? entries.find(([, win]) => pctOf(win) !== null)
+          ?? null)
+        : null
+      const ccView = ccWin === null ? null : (() => {
+        const [ccKey, ccValue] = ccWin
+        const ccPct = pctOf(ccValue)
+        const bar = simpleBarByDirection(ccPct, planDirection)
+        const reset = miniMaxResetText(ccValue, t)
+        const balance = entries.filter(([, win]) => pctOf(win) === null && typeof win?.text === 'string')
+          .map(([, win]) => textWinLoc(win.text, resolveLocale(state.config))).join(' · ')
+        const otherPct = entries.filter(([name, win]) => name !== ccKey && pctOf(win) !== null)
+          .map(([name, win]) => codingPlanWindowLabel(name, t) + ' ' + pctOf(win) + '%').join(' · ')
+        const otherResets = entries.filter(([name, win]) => name !== ccKey && pctOf(win) !== null)
+          .map(([name, win]) => {
+            const countdown = formatResetCountdown(win?.resetsAt, t)
+            return countdown ? codingPlanWindowLabel(name, t) + ' ' + countdown : null
+          }).filter(Boolean).join(' · ')
+        const paceLine = paceOf(ccPct, ccValue?.resetsAt)
+        const S = Date.parse(typeof ccValue?.periodStartAt === 'string' ? ccValue.periodStartAt : '')
+        const R = Date.parse(typeof ccValue?.resetsAt === 'string' ? ccValue.resetsAt : '')
+        const verdict = Number.isFinite(S) && Number.isFinite(R) ? paceStatusOf(ccPct, S, R) : null
+        const paceRow = paceLine !== null || verdict !== null
+          ? el('div', { key: 'p', className: 'cm-bbox-line cm-num' },
+            paceLine,
+            paceLine !== null && verdict !== null ? ' · ' : null,
+            verdict === null ? null : verdict.lvl === 'ok' ? verdict.t : el('span', { className: 'cm-verdict ' + verdict.lvl }, verdict.t))
+          : null
+        const lines = []
+        if (otherPct) lines.push(el('div', { key: 'o', className: 'cm-bbox-line cm-num' }, otherPct))
+        if (otherResets && balance) {
+          lines.push(el('div', { key: 'b', className: 'cm-bbox-head' },
+            el('span', { className: 'cm-bbox-label' }, otherResets),
+            el('span', { className: 'cm-bbox-pct cm-num' }, balance)))
+          if (reset) lines.push(el('div', { key: 'r', className: 'cm-bbox-line' }, reset))
+        } else {
+          if (otherResets) lines.push(el('div', { key: 's', className: 'cm-bbox-line' }, otherResets))
+          if (balance) lines.push(el('div', { key: 't', className: 'cm-bbox-line cm-num' }, balance))
+          if (reset) lines.push(el('div', { key: 'r', className: 'cm-bbox-line' }, reset))
+        }
+        if (paceRow) lines.push(paceRow)
+        const body = el(Fragment, null,
+          el('div', { className: 'cm-bbox-head' },
+            el('span', { className: 'cm-bbox-label' }, (STRIP_VENDOR_SHORT[id] ?? id) + ' ' + codingPlanWindowLabel(ccKey, t)),
+            el('span', { className: 'cm-bbox-pct cm-num' }, bar.label === null ? '—' : bar.label + '%')),
+          el('div', { className: 'cm-bbox-bar' },
+            el('div', { className: 'cm-bbox-fill', style: { width: bar.width + '%' } })),
+          ...lines)
+        return { rail: bar.label === null ? '—' : bar.label + '%', level: ccPct >= 100 ? 'over' : ccPct >= 80 ? 'warn' : 'ok', body }
+      })()
       const rows = entries.map(([name, win]) => {
         const pct = pctOf(win)
         if (pct === null) {
@@ -2679,16 +2777,20 @@
       const detail = [t(rowDef.labelKey), ...detailParts].join('\n')
       const pcts = entries.map(([, win]) => pctOf(win)).filter(p => p !== null)
       const level = pcts.some(p => p >= 100) ? 'over' : pcts.some(p => p >= 80) ? 'warn' : 'ok'
-      const railText = pcts.length > 0
+      // CommandCode 视图存在时,轨道/告警级别/宽栏正文一律取月度主窗口(不随窗口选择器收窄)。
+      const boxLevel = ccView !== null ? ccView.level : level
+      const railText = ccView !== null ? ccView.rail : pcts.length > 0
         ? pcts.slice(0, windowPickOf(id) !== null ? pcts.length : 2).map(p => simpleBarByDirection(p, planDirection).label + '%').join(' ')
         : (typeof entries[0][1]?.text === 'string' ? textWinLoc(entries[0][1].text, resolveLocale(state.config)) : '—')
       return el(Tooltip, { label: el('span', { style: { whiteSpace: 'pre-line' } }, detail), side: 'right', delayMs: 300 },
-        el('div', { ...hoverProps, className: 'cm-bbox cm-mm clickable' + (level === 'ok' ? '' : ' ' + level) + (wide === false ? ' rail' : '') + (refresh.busy ? ' busy' : ''), ...clickableRefreshProps(refresh.busy, refresh.run) },
+        el('div', { ...hoverProps, className: (ccView !== null ? 'cm-bbox clickable' : 'cm-bbox cm-mm clickable') + (boxLevel === 'ok' ? '' : ' ' + boxLevel) + (wide === false ? ' rail' : '') + (refresh.busy ? ' busy' : ''), ...clickableRefreshProps(refresh.busy, refresh.run) },
           wide === false
             ? el('div', { className: 'cm-bbox-rail cm-num' }, railText)
-            : el(Fragment, null,
-              el('div', { className: 'cm-mm-title' }, t(rowDef.labelKey)),
-              ...rows)))
+            : ccView !== null
+              ? ccView.body
+              : el(Fragment, null,
+                el('div', { className: 'cm-mm-title' }, t(rowDef.labelKey)),
+                ...rows)))
     }
 
     const readGatewayAccountLS = id => {
@@ -3234,11 +3336,11 @@
       if (showCustomBalanceBar) nodes.push(el(CustomBalanceBox, { state, wide, api: props.api }))
       else if (showCustomBalance) nodes.push(el(CustomBalanceRowContent, { state, wide, api: props.api }))
       const afterBalance = nodes.length
+      if (codexOn) nodes.push(el(CodexPlanBox, { state, wide, api: props.api }))
       if (plansOn) nodes.push(...sidebarPlanIds.map(id => id === 'minimax'
         ? el(MiniMaxPlanBox, { state, wide, api: props.api })
         : el(CodingPlanBox, { id, state, wide, api: props.api })))
       nodes.push(...gatewayNodes)
-      if (codexOn) nodes.push(el(CodexPlanBox, { state, wide, api: props.api }))
       if (goOk && budgetOn && wide && !simple) {
         // 同时出现:合并为一张卡片(Go 在上、预算在下,细分隔线),各自保留预警色与自己的详细信息开关。
         const goView = goBoxBody(state, config, t)

@@ -236,8 +236,23 @@ console.log('[ok] 浏览器端 bundle 语法门禁(client.js vm 编译)通过')
   assert.ok(src96.includes('live.accounts.length === 0') && src96.includes("if (rows.length === 0) rows.push({ name: t('gatewayQuotaEmpty')"), '无账号的来源隐藏；空额度账号保留切换入口')
   // 挂载:SidebarFooter 早退条件与节点插入都包含网关卡片(此前整条路径无 gateway 分支)。
   assert.ok(src96.includes('!showToday && gatewayNodes.length === 0) return null'), 'issue #96:SidebarFooter 早退条件纳入网关卡片')
-  assert.ok(src96.includes('nodes.push(...gatewayNodes)'), 'issue #96:SidebarFooter 节点序列插入网关卡片(计划卡之后、Codex 之前)')
-  assert.ok(src96.indexOf('nodes.push(...gatewayNodes)') > src96.indexOf('MiniMaxPlanBox, { state, wide, api: props.api }') && src96.indexOf('nodes.push(...gatewayNodes)') < src96.indexOf('el(CodexPlanBox'), 'issue #96:网关卡片排序在计划卡之后、Codex 探测卡之前')
+  // 卡片栈顺序:Codex 卡 → 计划卡(MiniMax 仍走专用卡)→ 网关卡。顺序断言改在
+  // SidebarFooter 自身源码片段上按真实插入语句比较;三段插入都必须存在(缺任何一段
+  // 都无法靠 indexOf 的 -1 通过),再比下标,顺序回退到旧写法即失败。
+  assert.ok(src96.includes('function SidebarFooter('), 'issue #96:SidebarFooter 源码可定位')
+  const footer96 = src96.slice(src96.indexOf('function SidebarFooter('))
+  const codexPush96 = 'nodes.push(el(CodexPlanBox, { state, wide, api: props.api }))'
+  const plansPush96 = "nodes.push(...sidebarPlanIds.map(id => id === 'minimax'"
+  const gatewayPush96 = 'nodes.push(...gatewayNodes)'
+  for (const marker of [codexPush96, plansPush96, gatewayPush96]) {
+    assert.ok(footer96.includes(marker), `issue #96:SidebarFooter 含卡片插入 ${marker}`)
+  }
+  assert.ok(footer96.includes('? el(MiniMaxPlanBox, { state, wide, api: props.api })'), 'issue #96:计划卡插入保留 MiniMax 专用卡分流')
+  const codexAt96 = footer96.indexOf(codexPush96)
+  const plansAt96 = footer96.indexOf(plansPush96)
+  const gatewayAt96 = footer96.indexOf(gatewayPush96)
+  assert.ok(codexAt96 < plansAt96, 'issue #96 + canonical footer-order:Codex 卡在计划卡之前(Codex → 计划卡 → 网关)')
+  assert.ok(plansAt96 < gatewayAt96, 'issue #96 + canonical footer-order:网关卡在计划卡之后(Codex → 计划卡 → 网关)')
   // 行渲染:复用 MiniMax 行(已用口径/告警阈值一致),Provider 前缀与 credits 兜底都在。
   assert.ok(/function GatewayQuotaBox[\s\S]*miniMaxRow\(name, win, direction, t\)/.test(src96), 'issue #96:网关卡片行渲染复用 miniMaxRow(与计划卡同口径)')
   assert.ok(/function GatewayQuotaBox[\s\S]*GATEWAY_PROVIDER_LABELS\[account\.provider\]/.test(src96), 'issue #96:多账号时行标签带 Provider 前缀')

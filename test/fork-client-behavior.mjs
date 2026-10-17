@@ -121,3 +121,41 @@ test('the plan settings picker helpers stay wired to the real components', () =>
     assert.ok(uses > declares, `${symbol} is referenced by render paths (${uses} occurrences)`)
   }
 })
+
+// TEST-ONLY: Task 8 — usage pace/verdict helpers and their card wiring.
+test('pace helpers compute the rate and the over/under verdict against an injected clock', () => {
+  const { paceOf, paceStatusOf } = evalFns(['paceOf', 'paceStatusOf'].map(fn).join('\n'), ['paceOf', 'paceStatusOf'])
+  const now = Date.parse('2026-10-01T00:00:00Z')
+  const end = now + 7 * 864e5
+  assert.equal(paceOf(40, new Date(end).toISOString(), now), 'Pace 8.6%/day')
+  assert.equal(paceOf(40, '', now), null)
+  assert.deepEqual(paceStatusOf(50, now - 3.5 * 864e5, now + 3.5 * 864e5, now), { t: 'On pace', lvl: 'ok' })
+  assert.deepEqual(paceStatusOf(60, now - 3.5 * 864e5, now + 3.5 * 864e5, now), { t: 'Over pace by 10.0%', lvl: 'over' })
+  assert.deepEqual(paceStatusOf(40, now - 3.5 * 864e5, now + 3.5 * 864e5, now), { t: 'Under pace by 10.0%', lvl: 'ok' })
+  assert.equal(paceStatusOf(40, undefined, now + 3.5 * 864e5, now), null)
+})
+
+test('verdicts and picker wiring survive in the readable client source', () => {
+  // Wiring assertions in the upstream `readClientSource()` idiom (verify.mjs): pure-helper tests
+  // above cover the math; these pin the connections a pure test cannot observe.
+  assert.match(clientSource, /windowPickEntries\(Object\.entries\(windows\),\s*rowDef\.id\)/, 'strip honours the picker')
+  assert.match(clientSource, /windowPickOf\(rowDef\.id\)\s*===\s*null\s*&&\s*shown\s*>=\s*2/, 'strip cap bypassed only by an explicit pick')
+  assert.match(clientSource, /id\s*===\s*'commandcode'\s*\?\s*Object\.entries\(windows\)\s*:\s*windowPickEntries/, 'CC card bypasses the picker')
+  assert.ok(clientSource.includes('cm-verdict'), 'verdict span present')
+  assert.ok(clientSource.includes('periodStartAt'), 'CC pace status reads the API period start')
+  assert.ok(!clientSource.includes('ccMoResetISO'), 'no guessed CC reset fallback remains')
+  const footer = fn('SidebarFooter')
+  assert.ok(footer.includes('CodexPlanBox') && footer.includes('sidebarPlanIds.map'), 'Codex card and plan rows both present')
+  assert.ok(footer.indexOf('CodexPlanBox') < footer.indexOf('sidebarPlanIds.map'), 'Codex card stacks first')
+  const css = readFileSync(join(root, 'src/client', '01-open-styles-i18n.js'), 'utf8')
+  for (const rule of [
+    '.cm-footer-stack .cm-bbox:not(.cm-bbox-pair){padding:6px 10px',
+    '.cm-verdict{font-weight:600}',
+    '.cm-verdict.warn{color:var(--dsw-alias-state-warn-primary)}',
+    '.cm-footer-stack .cm-bbox-head>.cm-bbox-label{font-size:12px',
+    '.cm-footer-stack .cm-bbox-head>.cm-bbox-pct{font-size:15px',
+    '.cm-footer-stack:not(.simple) .cm-bbox:not(.cm-bbox-pair)>.cm-bbox-bar{height:5px}',
+    '.cm-footer-stack .cm-bbox-line{font-size:11px}',
+    '.cm-pick-row{',
+  ]) assert.ok(css.includes(rule), `CSS rule present: ${rule}`)
+})

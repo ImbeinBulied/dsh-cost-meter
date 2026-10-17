@@ -245,8 +245,11 @@ test('sidebar footer plan card follows the stored picker selection', () => {
 test('an explicit monthly pick keeps the CommandCode monthly window findable', () => {
   const { module, render, storage } = environment()
   // CC may expose more windows than the strip cap. Its card deliberately bypasses the picker so
-  // monthly stays reachable (per the module's documented rule), while the composer strip still
-  // honours an explicit pick and stops truncating it at the default two segments.
+  // monthly stays reachable (per the module's documented rule): the CC card body leads with the
+  // monthly metric and summarises the other percent windows on one line, whatever the stored pick
+  // says; the composer strip still honours an explicit pick and stops truncating it at the default
+  // two segments. Task 8 turned the CC body from mm-rows into that single-window card, so the
+  // assertions read the rendered text instead of the old row keys.
   const state = baseState({
     locale: 'en',
     quotaStrip: { enabled: true, budget: false, go: false, plans: true },
@@ -256,11 +259,12 @@ test('an explicit monthly pick keeps the CommandCode monthly window findable', (
       fiveHour: { percent: 10, resetsAt: '' }, weekly: { percent: 20, resetsAt: '' }, monthly: { percent: 30, resetsAt: '' },
     } },
   })
-  const box = () => render(module.test.CodingPlanBox, { id: 'commandcode', state, wide: true })
-  assert.deepEqual(rowKeys(box()), ['fiveHour', 'weekly', 'monthly'], 'unpicked card shows every CC window')
-  assert.equal(textOf(render(module.test.CodingPlanBox, { id: 'commandcode', state, wide: false })).trim(), '10% 20%')
+  const box = () => textOf(render(module.test.CodingPlanBox, { id: 'commandcode', state, wide: true }))
+  assert.match(box(), /CC Mo 30%/, 'unpicked card leads with the monthly window')
+  assert.match(box(), /5h 10% · Wk 20%/, 'the other percent windows stay summarised')
+  assert.equal(textOf(render(module.test.CodingPlanBox, { id: 'commandcode', state, wide: false })).trim(), '30%', 'the rail carries the monthly metric')
   storage.set('dsh-cost-meter.windowPick', JSON.stringify({ commandcode: 'monthly' }))
-  assert.deepEqual(rowKeys(box()), ['fiveHour', 'weekly', 'monthly'], 'CC card bypass keeps every window (monthly stays findable)')
+  assert.match(box(), /CC Mo 30%/, 'CC card bypass keeps the monthly window findable under a pick')
   const strip = render(module.test.QuotaStrip, { useCost: pick => pick({ state }) })
   assert.equal(countClass(strip, 'cm-qseg'), 1, 'the strip still honours the explicit pick')
   assert.match(textOf(strip), /30%/)
@@ -300,4 +304,187 @@ test('picker styles ship in the client stylesheet', () => {
   for (const rule of ["'.cm-pick-row{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 2px}'", "'.cm-pick-on{font-weight:600}'", "'.cm-pick-off{opacity:.45;text-decoration:line-through}'"]) {
     assert.ok(css.includes(rule), `stylesheet carries ${rule}`)
   }
+})
+
+// TEST-ONLY: Task 8 — pace/verdict card bodies (Go monthly anchor, Codex head/bar, CC API period)
+// and the footer card order, rendered from the real components in the VM harness above.
+test('the CC card renders the monthly bar with an API-period verdict and no guessed reset', () => {
+  const { module, render } = environment()
+  const stateWith = windows => baseState(
+    { locale: 'en', codingPlans: { commandcode: { enabled: true, display: 'sidebar' } } },
+    { commandcode: { status: 'ok', fetchedAt: 0, windows } },
+  )
+  // Symmetric period around the injected clock (2026-10-01T00:00:00Z): elapsed = 50% exactly,
+  // so pct 40 → "Under pace by 10.0%" with no rounding ambiguity.
+  const monthly = { percent: 40, resetsAt: '2026-10-16T00:00:00.000Z', periodStartAt: '2026-09-16T00:00:00.000Z' }
+  const withPeriod = render(module.test.CodingPlanBox, {
+    id: 'commandcode', wide: true,
+    state: stateWith({
+      monthly,
+      fiveHour: { percent: 5, resetsAt: '2026-10-01T06:00:00.000Z' },
+      balance: { text: '余额 $38.91' },
+    }),
+  })
+  const withPeriodText = textOf(withPeriod)
+  assert.match(withPeriodText, /40%/, 'monthly bar percent rendered')
+  assert.match(withPeriodText, /Balance \$38\.91/, 'balance text window localised')
+  assert.match(withPeriodText, /Pace \d+(\.\d+)?%\/day/, 'pace line rendered')
+  assert.match(withPeriodText, /Under pace by 10\.0%/, 'verdict uses the API period boundaries')
+  // The other percent windows are summarised (percent line) and their countdowns merge with the
+  // balance text into ONE head row; the monthly reset keeps its own line (15d to 2026-10-16).
+  const heads = () => nodes(withPeriod).filter(n => n.props?.className === 'cm-bbox-head')
+  assert.equal(heads().length, 2, 'card head plus the merged other-resets/balance row')
+  assert.match(textOf(heads()[1]), /5h 6h 0m left.*Balance \$38\.91/, 'their countdowns merge with the balance text')
+  assert.match(textOf(withPeriod), /5h 5%/, 'the other percent windows stay summarised')
+  const resetLine = nodes(withPeriod).find(n => n.props?.className === 'cm-bbox-line' && textOf(n).includes('(15d 0h left)'))
+  assert.ok(resetLine && /Resets:/.test(textOf(resetLine)), 'the monthly reset renders on its own line')
+  const withoutPeriod = render(module.test.CodingPlanBox, {
+    id: 'commandcode', wide: true,
+    state: stateWith({ monthly: { percent: 40, resetsAt: monthly.resetsAt }, fiveHour: { percent: 5, resetsAt: '2026-10-01T06:00:00.000Z' }, balance: { text: '余额 $38.91' } }),
+  })
+  const withoutPeriodText = textOf(withoutPeriod)
+  assert.ok(!/pace by/i.test(withoutPeriodText), 'unknown period → no guessed verdict')
+  assert.ok(!/NaN|undefined/.test(withoutPeriodText), 'no placeholder text leaks into the card')
+  // 60% against the same half-elapsed period → "Over pace by 10.0%": the verdict leaves the plain
+  // text form and renders the classed span the CSS colours.
+  const overPace = render(module.test.CodingPlanBox, {
+    id: 'commandcode', wide: true,
+    state: stateWith({ monthly: { ...monthly, percent: 60 }, balance: { text: '余额 $38.91' } }),
+  })
+  const verdictSpan = nodes(overPace).find(n => typeof n.props?.className === 'string' && n.props.className.startsWith('cm-verdict '))
+  assert.equal(verdictSpan?.props.className, 'cm-verdict over', 'over-pace verdict renders the coloured span')
+  assert.equal(textOf(verdictSpan), 'Over pace by 10.0%')
+  assert.equal(nodes(overPace).filter(n => n.props?.className === 'cm-bbox-head').length, 1, 'a balance with no other countdowns stays a plain line, not a merged head row')
+})
+
+test('the Go card drives pace/status from the monthly window even when the main window is rolling', () => {
+  const { module, render } = environment()
+  // mainKey = rolling (10%, resets in 10d → 9.0%/day if it were used); monthly 40%, resets in 2d → 30.0%/day.
+  const state = baseState({
+    locale: 'en',
+    goQuota: { enabled: true, main: 'rolling' },
+  }, {})
+  state.goQuota = {
+    status: 'ok',
+    rolling: { percent: 10, resetsAt: '2026-10-11T00:00:00.000Z' },
+    weekly: { percent: 20, resetsAt: '2026-10-11T00:00:00.000Z' },
+    monthly: { percent: 40, resetsAt: '2026-10-03T00:00:00.000Z' },
+  }
+  const text = textOf(render(module.test.GoQuotaBox, { state, wide: true }))
+  assert.match(text, /Pace 30\.0%\/day/, 'pace comes from the monthly window, not the rolling main window')
+  assert.ok(!/Pace 9\.0%\/day/.test(text), 'rolling window must not drive pace')
+  // 30-day anchor from the monthly reset: elapsed 28/30 → 93.3% expected vs 40% used.
+  assert.match(text.replace(/\s+/g, ' '), /Pace 30\.0%\/day · Under pace by 53\.3%/, 'pace and verdict merge into one row')
+})
+
+test('the Codex card renders the Go-style head, bar, reset line and merged pace/verdict', () => {
+  const { module, render } = environment()
+  // Period start is exactly the injected clock (2026-10-01T00:00:00Z): elapsed = 0%, so pct 20 is
+  // over pace by the full 20.0%. Also pins that a period starting exactly now is accepted.
+  module.test.setCodexCache({ status: 'ok', fetchedAt: 0, windows: { weekly: { percent: 20, resetsAt: '2026-10-08T00:00:00.000Z' } } })
+  const state = baseState({ locale: 'en', codexQuotaEnabled: true }, {})
+  const card = render(module.test.CodexPlanBox, { state, wide: true })
+  const text = textOf(card)
+  assert.match(text, /ChatGPT \(Codex\) weekly quota/, 'head carries the title')
+  assert.match(text, /20%/, 'head carries the used percent')
+  assert.match(text, /Resets: .*\(7d 0h left\)/, 'reset line keeps the date plus countdown')
+  assert.match(text.replace(/\s+/g, ' '), /Pace 11\.4%\/day · Over pace by 20\.0%/, 'pace and verdict merge into one row')
+  const classes = nodes(card).map(n => n.props?.className).filter(c => typeof c === 'string')
+  assert.ok(classes.includes('cm-bbox-bar'), 'Go-style bar is rendered directly')
+  assert.ok(classes.includes('cm-verdict over'), 'over-pace verdict renders the coloured span')
+  assert.ok(!classes.includes('cm-mm-title') && !classes.some(c => c.split(' ').includes('cm-mm')), 'the mm-row styling class is gone')
+})
+
+test('the rendered sidebar stacks the Codex card before the plan cards', () => {
+  const { module, render } = environment()
+  module.test.setCodexCache({ status: 'ok', windows: { weekly: { percent: 20, resetsAt: '' } }, fetchedAt: 0 })
+  const state = baseState({
+    locale: 'en',
+    codexQuotaEnabled: true,
+    codingPlans: { anthropic: { enabled: true, display: 'sidebar' }, minimax: { enabled: true, display: 'sidebar' } },
+  }, {
+    anthropic: { status: 'ok', fetchedAt: 0, windows: { fiveHour: { percent: 5, resetsAt: '' } } },
+    minimax: { status: 'ok', fetchedAt: 0, windows: { '5h': { percent: 7, resetsAt: '' } } },
+  })
+  const footer = render(module.test.SidebarFooter, { useCost: pick => pick({ state }), wide: true })
+  const cardName = type => type === module.test.CodexPlanBox ? 'codex'
+    : type === module.test.MiniMaxPlanBox ? 'minimax'
+      : type === module.test.CodingPlanBox ? 'plan' : null
+  const order = nodes(footer).map(n => cardName(n.type)).filter(Boolean)
+  // Codex first; then the plan rows in table order (anthropic before minimax), with MiniMax on its
+  // own dedicated card; the gateway cards keep the tail (issue #96 path, unchanged).
+  assert.deepEqual(order, ['codex', 'plan', 'minimax'], 'Codex card renders first, then the plan cards')
+})
+
+test('the rendered sidebar stacks Codex, then the CommandCode card, then Go', () => {
+  // The fork's actual three-card stack: Codex probe card → CommandCode plan card → Go quota card.
+  // Realistic fixture on every window (rolling/weekly/monthly incl. reset timestamps, the CC monthly
+  // API period, and the goQuota snapshot the sidebar gate reads), each card rendered from the props
+  // the footer passes so the order cannot be satisfied by an empty element.
+  const { module, render } = environment()
+  module.test.setCodexCache({ status: 'ok', fetchedAt: 0, windows: { weekly: { percent: 20, resetsAt: '2026-10-08T00:00:00.000Z' } } })
+  const state = baseState({
+    locale: 'en',
+    hideTodayCost: true,
+    codexQuotaEnabled: true,
+    goQuota: { enabled: true, display: 'sidebar', main: 'rolling', detail: true },
+    codingPlans: { commandcode: { enabled: true, display: 'sidebar' } },
+  }, {
+    commandcode: { status: 'ok', fetchedAt: 0, windows: {
+      fiveHour: { percent: 10, resetsAt: '2026-10-01T06:00:00.000Z' },
+      weekly: { percent: 20, resetsAt: '2026-10-05T00:00:00.000Z' },
+      monthly: { percent: 30, resetsAt: '2026-10-16T00:00:00.000Z', periodStartAt: '2026-09-16T00:00:00.000Z' },
+    } },
+  })
+  state.goQuota = {
+    status: 'ok',
+    fetchedAt: 0,
+    rolling: { percent: 10, resetsAt: '2026-10-01T05:00:00.000Z' },
+    weekly: { percent: 20, resetsAt: '2026-10-05T00:00:00.000Z' },
+    monthly: { percent: 40, resetsAt: '2026-10-03T00:00:00.000Z' },
+  }
+  const footer = render(module.test.SidebarFooter, { useCost: pick => pick({ state }), wide: true })
+  const stack = footer.children.filter(n => n !== null && typeof n === 'object')
+  assert.deepEqual(stack.map(n => n.type), [module.test.CodexPlanBox, module.test.CodingPlanBox, module.test.GoQuotaBox], 'card order is Codex, CommandCode, Go')
+  assert.equal(stack[1].props.id, 'commandcode', 'the middle card is the CommandCode plan card')
+  assert.equal(stack[1].props.state, state)
+  assert.equal(stack[2].props.wide, true)
+  assert.ok(render(module.test.CodexPlanBox, stack[0].props), 'Codex card renders with the fixture')
+  assert.match(textOf(render(module.test.CodingPlanBox, stack[1].props)), /CC Mo 30%/, 'CommandCode card renders its monthly view')
+  assert.match(textOf(render(module.test.GoQuotaBox, stack[2].props)), /Go 5h 10%/, 'Go card renders its main window')
+})
+
+test('a text-only CommandCode snapshot still renders without the percent branch', () => {
+  const { module, render } = environment()
+  const state = baseState(
+    { locale: 'en', codingPlans: { commandcode: { enabled: true, display: 'sidebar' } } },
+    { commandcode: { status: 'ok', fetchedAt: 0, windows: { monthly: { text: '余额 $38.91', resetsAt: '' } } } },
+  )
+  const text = textOf(render(module.test.CodingPlanBox, { id: 'commandcode', state, wide: true }))
+  assert.match(text, /Balance \$38\.91/, 'text window renders through the generic rows path')
+  assert.ok(!/NaN|undefined|pace by/i.test(text), 'no guessed verdict or placeholder text')
+})
+
+test('a CommandCode pick that omits monthly still renders the monthly card and rail', () => {
+  // Task 7 review regression: the CC card ignores the picker by design so the monthly window stays
+  // findable — including when the stored pick explicitly lists other windows. The strip still
+  // honours the pick, so the two surfaces disagree on purpose.
+  const { module, render, storage } = environment()
+  const state = baseState({
+    locale: 'en',
+    quotaStrip: { enabled: true, budget: false, go: false, plans: true },
+    codingPlans: { commandcode: { enabled: true, display: 'both' } },
+  }, {
+    commandcode: { status: 'ok', fetchedAt: 0, windows: {
+      fiveHour: { percent: 10, resetsAt: '' }, weekly: { percent: 20, resetsAt: '' }, monthly: { percent: 30, resetsAt: '' },
+    } },
+  })
+  storage.set('dsh-cost-meter.windowPick', JSON.stringify({ commandcode: 'fiveHour,weekly' }))
+  const cardText = textOf(render(module.test.CodingPlanBox, { id: 'commandcode', state, wide: true }))
+  assert.match(cardText, /30%/, 'the card still shows the monthly window the pick omits')
+  assert.match(cardText, /5h 10% · Wk 20%/, 'the other percent windows stay summarised on their own line')
+  assert.equal(textOf(render(module.test.CodingPlanBox, { id: 'commandcode', state, wide: false })).trim(), '30%', 'the rail keeps the monthly metric')
+  const strip = render(module.test.QuotaStrip, { useCost: pick => pick({ state }) })
+  assert.equal(countClass(strip, 'cm-qseg'), 2, 'the strip renders only the picked windows')
+  assert.doesNotMatch(textOf(strip), /30%/, 'the strip never shows the omitted monthly window')
 })
