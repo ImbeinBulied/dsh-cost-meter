@@ -2317,7 +2317,7 @@
                 const monthly = goQuota.monthly ?? null // pinned: the monthly window drives pace/status, not mainKey
                 const paceLine = paceOf(monthly?.percent, monthly?.resetsAt)
                 const R = Date.parse(typeof monthly?.resetsAt === 'string' ? monthly.resetsAt : '')
-                const verdict = Number.isFinite(R) ? paceStatusOf(monthly?.percent, R - 30 * 864e5, R) : null
+                const verdict = Number.isFinite(R) ? paceStatusOf(monthly?.percent, goMonthStart(R), R) : null
                 if (paceLine === null && verdict === null) return null
                 return el('div', { className: 'cm-bbox-line cm-num' },
                   paceLine,
@@ -2667,11 +2667,20 @@
       return 'Pace ' + ((100 - pct) / (ms / 864e5)).toFixed(1) + '%/day'
     }
 
+    /** Go monthly cycles reset on the same UTC day next month; clamp when prior month is shorter. */
+    function goMonthStart(resetAtMs) {
+      const reset = new Date(resetAtMs)
+      const year = reset.getUTCFullYear()
+      const month = reset.getUTCMonth()
+      const day = Math.min(reset.getUTCDate(), new Date(Date.UTC(year, month, 0)).getUTCDate())
+      return Date.UTC(year, month - 1, day, reset.getUTCHours(), reset.getUTCMinutes(), reset.getUTCSeconds(), reset.getUTCMilliseconds())
+    }
+
     /** Over/under-pace verdict against the real period boundaries; unknown period → null. */
     function paceStatusOf(pct, startMs, endMs, now = Date.now()) {
       if (typeof pct !== 'number' || !Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs || now < startMs || now >= endMs) return null
       const delta = pct - 100 * (now - startMs) / (endMs - startMs)
-      if (Math.abs(delta) < 1) return { t: 'On pace', lvl: 'ok' }
+      if (Math.abs(delta) < 0.5) return { t: 'On pace', lvl: 'ok' }
       return delta < 0
         ? { t: 'Under pace by ' + Math.abs(delta).toFixed(1) + '%', lvl: 'ok' }
         : { t: 'Over pace by ' + delta.toFixed(1) + '%', lvl: delta >= 5 ? 'over' : 'warn' }
