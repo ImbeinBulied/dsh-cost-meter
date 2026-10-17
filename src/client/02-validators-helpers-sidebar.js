@@ -1011,6 +1011,10 @@
       const a = entry.apiCost === undefined || entry.apiCost === null ? c : Number(entry.apiCost)
       return Number.isFinite(a) && a >= 0 ? Math.min(a, c) : c
     }
+    /** Plan-equivalent API estimate: total equivalent cost minus real API spend, never negative. */
+    function planEquivalentEstimate(entry) {
+      return Math.max(0, (Number(entry?.cost) || 0) - moneyCostOf(entry))
+    }
     /**
      * 展示口径(v1.6.0「含 Plan 总额」全局开关):
      *  - 关(默认):真金白银 apiCost;
@@ -1026,12 +1030,13 @@
     // ── Plan/API 双轨分类(issue #64):与 lib/plan-billing.js 同逻辑的镜像实现
     //    (bundle 无法导入 Node 模块,修改时两处同步)。──
     const PLAN_PROVIDER_ALIASES_LOCAL = {
-      go: ['go', 'zen', 'opencode', 'opencode-go'],
+      go: ['go', 'zen', 'opencode', 'opencode-go', 'opencode-go-responses', 'opencode-go-messages'],
+      commandcode: ['command-code'],
       qwen: ['qwen', 'qwen-tokenplan', 'qianwen-tokenplan', 'qwen-token-plan', 'qianwen-token-plan'],
       scnet: ['scnet', 'scnet-tokenplan', 'scnet-token-plan'],
       mimo: ['mimo', 'xiaomimimo', 'mimo-token-plan', 'xiaomi-token-plan', 'xiaomi-token-plan-cn', 'xiaomi-token-plan-sgp', 'xiaomi-token-plan-ams'],
     }
-    const PLAN_PROVIDER_IDS_LOCAL = ['anthropic', 'zai', 'minimax', 'kimi', 'openrouter', 'siliconflow', 'commandcode', 'scnet', 'volcengine', 'qwen', 'mimo', 'go']
+    const PLAN_PROVIDER_IDS_LOCAL = ['anthropic', 'zai', 'minimax', 'kimi', 'openrouter', 'siliconflow', 'commandcode', 'scnet', 'volcengine', 'qwen', 'mimo', 'go', 'openai-codex']
     function planProviderIdOfLocal(provider) {
       const name = String(provider ?? '').trim().toLowerCase().replace(/^llm-/, '')
       if (name.length === 0) return null
@@ -3214,6 +3219,8 @@
       const config = state.config
       const t = makeT(resolveLocale(config))
       const todayValue = sidebarTodayValue(today, config, t)
+      // Plan 调用的等值 API 金额(= 总等值 − 真金白银),与展示口径开关无关。
+      const cmPlanEq = planEquivalentEstimate(today)
       const budget = config.budget ?? { enabled: false, amount: 100, period: 'month' }
       const rate = Number(config.exchangeRate)
       const budgetUsedUsd = state.budgetUsed ?? (
@@ -3261,13 +3268,19 @@
           cache: formatTokens(today.cacheRead + today.cacheWrite),
           output: formatTokens(today.output),
         }),
+        ...(cmPlanEq > 0 ? [t('planEquivalentEstimate', { amount: formatMoneyUsd(cmPlanEq, config) })] : []),
         t('monthCost', { amount: formatMoneyUsd(displayCostOf(state.month, config), config) }),
         t('totalCost', { amount: formatMoneyUsd(displayCostOf(state.total, config), config) }),
       ].join('; ')
       return el(Tooltip, { label: detail, side: 'right', delayMs: 300 },
         el(Fragment, null,
           el('div', { className: 'cm-foot' + (wide ? '' : ' cm-foot-rail') },
-            wide ? el(Fragment, null, t('today'), ' ', el('span', { className: 'cm-num' }, todayValue)) : el(WalletIcon, { size: 16 })),
+            wide ? el(Fragment, null,
+              t(config.showTotalWithPlan === true ? 'todayEquivalent' : 'today'), ' ',
+              el('span', { className: 'cm-num' }, todayValue),
+              config.showTotalWithPlan !== true && cmPlanEq > 0
+                ? el('span', { className: 'cm-plan-estimate' }, ' · ' + t('planEquivalentShort', { amount: formatMoneyUsd(cmPlanEq, config) }))
+                : null) : el(WalletIcon, { size: 16 })),
           wide ? peakNoticeEl(state, config, t) : null))
     }
 

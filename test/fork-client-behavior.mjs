@@ -18,9 +18,10 @@ process.once('exit', restoreFetch)
 const root = fileURLToPath(new URL('..', import.meta.url))
 const lib = file => import(pathToFileURL(join(root, 'lib', file)).href)
 // Imported only AFTER the isolation setup above. The real sanitizer supplies the config shapes the
-// browser receives; Task 9 needs it for the classifier/backfill tests.
-const { sanitizeConfig } = await lib('store.js')
+// browser receives; Task 9 needs both for the classifier/backfill tests.
+const { defaultConfig, sanitizeConfig } = await lib('store.js')
 assert.equal(typeof sanitizeConfig, 'function', 'lib/store.js exports sanitizeConfig for later tasks')
+assert.equal(typeof defaultConfig, 'function', 'lib/store.js exports defaultConfig for later tasks')
 assert.equal(typeof env.root, 'string', 'synthetic env root is established before any lib import')
 
 const clientFiles = readdirSync(join(root, 'src/client')).filter(n => n.endsWith('.js')).sort()
@@ -158,4 +159,111 @@ test('verdicts and picker wiring survive in the readable client source', () => {
     '.cm-footer-stack .cm-bbox-line{font-size:11px}',
     '.cm-pick-row{',
   ]) assert.ok(css.includes(rule), `CSS rule present: ${rule}`)
+})
+
+// TEST-ONLY: Task 9 — plan-equivalent estimate, client classifier mirror and cost labels.
+test('the plan-equivalent estimate is today cost minus recorded API spend and never negative', () => {
+  const { planEquivalentEstimate } = evalFns([fn('moneyCostOf'), fn('planEquivalentEstimate')].join('\n'), ['planEquivalentEstimate'])
+  assert.equal(planEquivalentEstimate({ cost: 15, apiCost: 0 }), 15, 'a pure plan day keeps the whole equivalent amount')
+  assert.equal(planEquivalentEstimate({ cost: 15, apiCost: 3 }), 12, 'real API spend is excluded from the estimate')
+  assert.equal(planEquivalentEstimate({ cost: 3, apiCost: 3 }), 0, 'all-API usage has no plan equivalent')
+  assert.equal(planEquivalentEstimate({ cost: 3 }), 0, 'legacy entry without apiCost counts as full API spend')
+  // moneyCostOf's documented fallbacks, from the estimate's side: a garbled/negative/oversized
+  // apiCost is never trusted into a negative estimate (it either clamps to cost or is dropped).
+  assert.equal(planEquivalentEstimate({ cost: 15, apiCost: 20 }), 0, 'apiCost above cost clamps to full API spend')
+  assert.equal(planEquivalentEstimate({ cost: 15, apiCost: -5 }), 0, 'negative apiCost is not cash spend: full cost')
+  assert.equal(planEquivalentEstimate({ cost: 15, apiCost: 'garbled' }), 0, 'unparseable apiCost falls back to full cost')
+  assert.equal(planEquivalentEstimate({ cost: 0, apiCost: 0 }), 0)
+  assert.equal(planEquivalentEstimate(undefined), 0, 'missing bucket has no estimate')
+  assert.equal(planEquivalentEstimate(null), 0, 'null bucket has no estimate')
+})
+
+test('the client plan classifier mirrors the host map and the usage consumer', () => {
+  const slice = clientSource.slice(
+    clientSource.indexOf('const PLAN_PROVIDER_ALIASES_LOCAL = {'),
+    clientSource.indexOf('function usageSplit('),
+  )
+  assert.ok(slice.length > 0, 'client classifier block present')
+  const { planProviderIdOfLocal, billingClassOfLocal, usageHasPlanClass } = evalFns(
+    [fn('modelNameText'), fn('canonModelIdLocal'), slice, fn('usageHasPlanClass')].join('\n'),
+    ['planProviderIdOfLocal', 'billingClassOfLocal', 'usageHasPlanClass'],
+  )
+  // The config the browser actually receives is sanitized: sanitizeConfig backfills every plan id
+  // from DEFAULT_PLAN_PROVIDER_CLASS, including 'openai-codex' → 'plan' (real host path), so a config
+  // that never listed the entry still classifies as plan.
+  const sanitized = sanitizeConfig(defaultConfig())
+  assert.equal(sanitized.planBilling.providers['openai-codex'], 'plan', 'host sanitizer backfills the Codex plan class')
+  assert.equal(billingClassOfLocal('openai-codex', 'gpt-6-luna', sanitized), 'plan')
+  assert.equal(billingClassOfLocal('llm-openai-codex', 'gpt-6-luna', sanitized), 'plan', 'the llm- wrapper route resolves to the same plan id')
+  const apiConfig = structuredClone(sanitized)
+  apiConfig.planBilling.providers['openai-codex'] = 'api'
+  assert.equal(billingClassOfLocal('openai-codex', 'gpt-6-luna', apiConfig), 'api', 'an explicit API class wins over the default')
+  // Route aliases inherit their enabled plan classification (providers stay 'auto'; the enabled set
+  // supplies 'plan') — mirrors Task 5's host map, including the llm- wrapper spelling.
+  const enabled = structuredClone(sanitized)
+  enabled.codingPlans.commandcode.enabled = true
+  enabled.goQuota.enabled = true
+  for (const [provider, planId] of [
+    ['command-code', 'commandcode'],
+    ['llm-command-code', 'commandcode'],
+    ['opencode-go-responses', 'go'],
+    ['opencode-go-messages', 'go'],
+  ]) {
+    assert.equal(planProviderIdOfLocal(provider), planId, `${provider} maps to ${planId}`)
+    assert.equal(billingClassOfLocal(provider, 'mimo-v2.6-flash', enabled), 'plan', `${provider} inherits the enabled plan class`)
+  }
+  assert.equal(billingClassOfLocal('opencode-go-responses', 'muse-spark-1.3-contributor', enabled), 'plan')
+  assert.equal(billingClassOfLocal('opencode-go-messages', 'minimax-m2.7', enabled), 'plan')
+  // Negative control: the explicit pay-as-you-go OpenCode Zen route is not a Go alias (host parity).
+  assert.equal(planProviderIdOfLocal('opencode-zen'), null)
+  assert.equal(billingClassOfLocal('opencode-zen', 'muse-spark-1.3-contributor', enabled), 'api')
+  // Priority: a per-model override outranks the provider class, as on the host.
+  const overridden = structuredClone(sanitized)
+  overridden.planBilling.models['openai-codex:gpt-6-luna'] = 'api'
+  assert.equal(billingClassOfLocal('openai-codex', 'gpt-6-luna', overridden), 'api', 'model-level override wins')
+  // Documented missing-entry fallback: with the explicit entry deleted from an otherwise sanitized
+  // config the mirror follows the enabled set → 'api' for codex. The host sanitizer is what backfills
+  // 'plan'; the client adds no second default map.
+  const entryless = structuredClone(sanitized)
+  delete entryless.planBilling.providers['openai-codex']
+  assert.equal(billingClassOfLocal('openai-codex', 'gpt-6-luna', entryless), 'api')
+  // Session/subagent usage path (the consumer the classifier exists for), through the real helper.
+  assert.equal(usageHasPlanClass({ byProviderModel: { 'openai-codex:gpt-6-luna': { cost: 1 } } }, sanitized), true)
+  assert.equal(usageHasPlanClass({ byProviderModel: { 'openai-codex:gpt-6-luna': { cost: 1 } } }, apiConfig), false)
+  assert.equal(usageHasPlanClass({ byProviderModel: { 'opencode-go-responses:muse-spark-1.3-contributor': { cost: 1 } } }, enabled), true)
+  assert.equal(usageHasPlanClass({ byProviderModel: { 'opencode-zen:muse-spark-1.3-contributor': { cost: 1 } } }, enabled), false)
+})
+
+test('the plan-equivalent labels ship verbatim in both locales and the estimate is wired into the footer', () => {
+  const i18n = readFileSync(join(root, 'src/client', '01-open-styles-i18n.js'), 'utf8')
+  for (const key of ['planEquivalentEstimate', 'planEquivalentShort', 'todayEquivalent']) {
+    const count = i18n.split(key + ':').length - 1
+    assert.equal(count, 2, `${key} present in zh and en dictionaries`)
+  }
+  const { MESSAGES } = evalFns(`const MESSAGES = ${balanced(clientSource, clientSource.indexOf('const MESSAGES = {') + 'const MESSAGES ='.length)}`, ['MESSAGES'])
+  const expected = {
+    zh: {
+      todayCostTitle: '今日 API 计价估算(订阅调用另列等值估算)',
+      planEquivalentEstimate: 'Plan 调用的 API 等值估算 {amount}',
+      planEquivalentShort: 'Plan 估算 {amount}',
+      todayEquivalent: '今日 API 等值',
+    },
+    en: {
+      todayCostTitle: "Today's API cost estimate (plan-equivalent shown separately)",
+      planEquivalentEstimate: 'Plan-equivalent API estimate {amount}',
+      planEquivalentShort: 'Plan est. {amount}',
+      todayEquivalent: 'Today equivalent',
+    },
+  }
+  for (const locale of ['zh', 'en']) for (const [key, value] of Object.entries(expected[locale])) {
+    assert.equal(MESSAGES[locale][key], value, `MESSAGES.${locale}.${key} carries the canonical label`)
+  }
+  // Wiring: the estimate is computed from today's bucket, the tooltip lists the API-equivalent
+  // amount, and the wide footer label switches with the plan-total toggle while the separate
+  // estimate only renders when that toggle is off.
+  assert.match(clientSource, /const cmPlanEq = planEquivalentEstimate\(today\)/, 'estimate computed from today')
+  assert.match(clientSource, /className: 'cm-plan-estimate'/, 'footer renders the estimate span')
+  assert.match(clientSource, /\.\.\.\(cmPlanEq > 0 \? \[t\('planEquivalentEstimate'/, 'tooltip lists the plan-equivalent estimate')
+  assert.match(clientSource, /t\(config\.showTotalWithPlan === true \? 'todayEquivalent' : 'today'\)/, 'wide label switches with showTotalWithPlan')
+  assert.match(clientSource, /config\.showTotalWithPlan !== true && cmPlanEq > 0/, 'separate estimate only while the toggle is off')
 })

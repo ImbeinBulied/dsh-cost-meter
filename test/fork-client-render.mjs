@@ -20,7 +20,7 @@ const source = readdirSync(join(root, 'src/client')).filter(n => n.endsWith('.js
 // Test-only exposure: the VM rewrites the test's own copy of the bundled source (production exports
 // are untouched). Components under test plus a cache setter so the Codex card renders without
 // driving its async probe.
-const EXPOSE = ['CodingPlanBox', 'QuotaStrip', 'GoQuotaBox', 'SidebarFooter', 'MiniMaxPlanBox', 'CodexPlanBox', 'PlanQuotaCard', 'QuotaCard']
+const EXPOSE = ['CodingPlanBox', 'QuotaStrip', 'GoQuotaBox', 'SidebarFooter', 'MiniMaxPlanBox', 'CodexPlanBox', 'PlanQuotaCard', 'QuotaCard', 'BudgetBoxContent']
 const TEST_SETTERS = 'setCodexCache: cache => Object.assign(codexQuotaCache, cache)'
 
 const element = (type, props, ...children) => ({ type, props: props ?? {}, children })
@@ -487,4 +487,49 @@ test('a CommandCode pick that omits monthly still renders the monthly card and r
   const strip = render(module.test.QuotaStrip, { useCost: pick => pick({ state }) })
   assert.equal(countClass(strip, 'cm-qseg'), 2, 'the strip renders only the picked windows')
   assert.doesNotMatch(textOf(strip), /30%/, 'the strip never shows the omitted monthly window')
+})
+
+// TEST-ONLY: Task 9 — the footer's plan-equivalent estimate, rendered from the real component with
+// an explicit-USD fixture (cost 15, recorded API spend 3 → estimate 12) instead of a mocked money
+// helper: the real formatter output and the real cmPlanEq wiring are what these assertions read.
+test('the rendered footer shows today cost minus API spend and follows the plan-total toggle', () => {
+  const { module, render } = environment()
+  const config = { locale: 'en', currency: 'USD', symbol: '$', exchangeRate: 1, decimals: 2, showTotalWithPlan: false }
+  const state = baseState(config, {})
+  state.today = { cost: 15, apiCost: 3, calls: 4, input: 1200, cacheRead: 0, cacheWrite: 0, output: 300 }
+  const boxProps = () => {
+    const footer = render(module.test.SidebarFooter, { useCost: pick => pick({ state }), wide: true })
+    const box = nodes(footer).find(n => n.type === module.test.BudgetBoxContent)
+    assert.ok(box, 'the footer mounts the budget/today box')
+    assert.equal(box.props.wide, true)
+    return box.props
+  }
+  const off = render(module.test.BudgetBoxContent, boxProps())
+  const offText = textOf(off).replace(/\s+/g, ' ').trim()
+  assert.equal(offText, 'Today $3 · Plan est. $12', 'API spend first, the plan equivalent listed separately')
+  assert.equal(countClass(off, 'cm-num'), 1)
+  assert.equal(countClass(off, 'cm-plan-estimate'), 1, 'the estimate span renders once')
+  const estimate = nodes(off).find(n => n.props?.className === 'cm-plan-estimate')
+  assert.equal(textOf(estimate), ' · Plan est. $12')
+  assert.ok(tooltipLabels(off).some(label => label.includes('Plan-equivalent API estimate $12')),
+    'the tooltip spells out the API-equivalent amount for plan usage')
+  assert.ok(tooltipLabels(off).some(label => label.includes("Today's API cost estimate (plan-equivalent shown separately)")),
+    'the tooltip keeps the canonical today title in the off mode')
+  assert.ok(!/NaN|undefined/.test(offText), 'no placeholder text leaks into the footer')
+  // The toggle on: the same $15 equivalent becomes the headline and the separate estimate is gone.
+  state.config = { ...config, showTotalWithPlan: true }
+  const on = render(module.test.BudgetBoxContent, boxProps())
+  const onText = textOf(on).replace(/\s+/g, ' ').trim()
+  assert.equal(onText, 'Today equivalent $15', 'the toggle relabels the headline as today equivalent')
+  assert.equal(countClass(on, 'cm-plan-estimate'), 0, 'no separate plan estimate while the toggle is on')
+  assert.ok(tooltipLabels(on).some(label => label.includes('Plan-equivalent API estimate $12')),
+    'the API-equivalent disclosure stays in the tooltip in both modes (canonical patch)')
+  // The Chinese locale renders the same amounts through the zh labels (no language-dependent money math).
+  state.config = { ...config, locale: 'zh' }
+  const zh = render(module.test.BudgetBoxContent, boxProps())
+  assert.equal(textOf(zh).replace(/\s+/g, ' ').trim(), '今日 $3 · Plan 估算 $12')
+  // The rail (narrow) foot line stays icon-only: the estimate must not leak out of the wide branch.
+  state.config = { ...config }
+  const rail = render(module.test.BudgetBoxContent, { ...boxProps(), wide: false })
+  assert.equal(countClass(rail, 'cm-plan-estimate'), 0, 'the rail keeps the icon-only foot line')
 })
