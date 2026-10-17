@@ -170,12 +170,15 @@ test('the plan settings picker helpers stay wired to the real components', () =>
 
 // TEST-ONLY: Task 8 — usage pace/verdict helpers and their card wiring.
 test('pace helpers compute the rate and the over/under verdict against an injected clock', () => {
-  const { paceOf, paceStatusOf } = evalFns(['paceOf', 'paceStatusOf'].map(fn).join('\n'), ['paceOf', 'paceStatusOf'])
+  const { paceOf, goMonthStart, paceStatusOf } = evalFns(['paceOf', 'goMonthStart', 'paceStatusOf'].map(fn).join('\n'), ['paceOf', 'goMonthStart', 'paceStatusOf'])
   const now = Date.parse('2026-10-01T00:00:00Z')
   const end = now + 7 * 864e5
   assert.equal(paceOf(40, new Date(end).toISOString(), now), 'Pace 8.6%/day')
   assert.equal(paceOf(40, '', now), null)
+  assert.equal(goMonthStart(Date.parse('2026-11-10T17:00:10Z')), Date.parse('2026-10-10T17:00:10Z'))
+  assert.equal(goMonthStart(Date.parse('2026-03-31T17:00:10Z')), Date.parse('2026-02-28T17:00:10Z'), 'short prior months clamp the cycle day')
   assert.deepEqual(paceStatusOf(50, now - 3.5 * 864e5, now + 3.5 * 864e5, now), { t: 'On pace', lvl: 'ok' })
+  assert.deepEqual(paceStatusOf(49.3, now - 3.5 * 864e5, now + 3.5 * 864e5, now), { t: 'Under pace by 0.7%', lvl: 'ok' })
   assert.deepEqual(paceStatusOf(60, now - 3.5 * 864e5, now + 3.5 * 864e5, now), { t: 'Over pace by 10.0%', lvl: 'over' })
   assert.deepEqual(paceStatusOf(40, now - 3.5 * 864e5, now + 3.5 * 864e5, now), { t: 'Under pace by 10.0%', lvl: 'ok' })
   assert.equal(paceStatusOf(40, undefined, now + 3.5 * 864e5, now), null)
@@ -188,6 +191,7 @@ test('verdicts and picker wiring survive in the readable client source', () => {
   assert.match(clientSource, /windowPickOf\(rowDef\.id\)\s*===\s*null\s*&&\s*shown\s*>=\s*2/, 'strip cap bypassed only by an explicit pick')
   assert.match(clientSource, /id\s*===\s*'commandcode'\s*\?\s*Object\.entries\(windows\)\s*:\s*windowPickEntries/, 'CC card bypasses the picker')
   assert.ok(clientSource.includes('cm-verdict'), 'verdict span present')
+  assert.match(clientSource, /paceStatusOf\(monthly\?\.percent,\s*goMonthStart\(R\),\s*R\)/, 'Go monthly pace uses the inferred calendar-month boundary')
   assert.ok(clientSource.includes('periodStartAt'), 'CC pace status reads the API period start')
   assert.ok(!clientSource.includes('ccMoResetISO'), 'no guessed CC reset fallback remains')
   const footer = fn('SidebarFooter')
