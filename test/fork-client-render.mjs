@@ -22,6 +22,13 @@ const source = readdirSync(join(root, 'src/client')).filter(n => n.endsWith('.js
 // driving its async probe.
 const EXPOSE = ['CodingPlanBox', 'QuotaStrip', 'GoQuotaBox', 'SidebarFooter', 'MiniMaxPlanBox', 'CodexPlanBox', 'PlanQuotaCard', 'QuotaCard', 'BudgetBoxContent']
 const TEST_SETTERS = 'setCodexCache: cache => Object.assign(codexQuotaCache, cache)'
+// Test-only hook probe (same in-memory rewrite as the exposures above): two useState slots plus a
+// functional update, so a re-render proves the harness reuses hook positions like React does.
+const TEST_PROBE = `    function __harnessHookProbe() {
+      const [count, setCount] = useState(0)
+      const [label] = useState('probe-label')
+      return { count, label, bump: () => setCount(previous => previous + 1) }
+    }`
 
 const element = (type, props, ...children) => ({ type, props: props ?? {}, children })
 const nodes = value => Array.isArray(value) ? value.flatMap(nodes) : value && typeof value === 'object' ? [value, ...nodes(value.children)] : []
@@ -38,6 +45,22 @@ function environment() {
   const now = Date.parse('2026-10-01T00:00:00Z')
   class Clock extends Date { static now() { return now } }
   const storage = new Map()
+  // `storageDenied` turns window.localStorage into a throwing PROPERTY GETTER, the browser case I1
+  // regressed: obtaining the property (not just calling its methods) can throw SecurityError.
+  let storageDenied = false
+  const localStorageShim = {
+    getItem: key => storage.get(key) ?? null,
+    setItem: (key, value) => storage.set(key, String(value)),
+  }
+  const windowShim = {
+    __ModuleLoader__: { load: value => { factory = value.factory } },
+  }
+  Object.defineProperty(windowShim, 'localStorage', {
+    get() {
+      if (storageDenied) throw new Error('synthetic storage getter denied')
+      return localStorageShim
+    },
+  })
   const React = {
     createElement: element,
     Fragment: 'fragment',
@@ -54,7 +77,8 @@ function environment() {
     useCallback(callback) { return callback },
     useSyncExternalStore(_subscribe, get) { return get() },
   }
-  vm.runInNewContext(source.replace('exports.apply = apply', `exports.test = { ${EXPOSE.join(', ')}, ${TEST_SETTERS} }; exports.apply = apply`), {
+  vm.runInNewContext(source.replace('exports.apply = apply', `${TEST_PROBE}
+      exports.test = { ${EXPOSE.join(', ')}, __harnessHookProbe, ${TEST_SETTERS} }; exports.apply = apply`), {
     navigator: { language: 'en' },
     console,
     AbortSignal,
@@ -64,16 +88,15 @@ function environment() {
     clearTimeout() {},
     setInterval: () => 0,
     clearInterval() {},
-    window: {
-      __ModuleLoader__: { load: value => { factory = value.factory } },
-      localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, String(value)) },
-    },
+    window: windowShim,
     fetch: async () => { throw new Error('no network in render tests') },
   })
   const module = factory(name => name === 'react' ? React : { Tooltip: 'tooltip' })
   return {
     module,
     storage,
+    /** Flip the browser's storage-denial state between renders. */
+    setStorageDenied: value => { storageDenied = value === true },
     render(component, props) {
       current = { slots: [], cursor: 0 }
       const tree = component(props)
@@ -83,7 +106,15 @@ function environment() {
     /** Mount a stateful component: the same hook slots survive re-renders, as in React. */
     mount(component, props) {
       const owner = { slots: [], cursor: 0, props, tree: null }
-      owner.render = next => { current = owner; owner.tree = component(next ?? owner.props); current = null; return owner.tree }
+      // React restarts the hook cursor at every component render; the slots (not the cursor) carry
+      // the state across renders.
+      owner.render = next => {
+        owner.cursor = 0
+        current = owner
+        owner.tree = component(next ?? owner.props)
+        current = null
+        return owner.tree
+      }
       owner.tree = owner.render(props)
       return owner
     },
@@ -148,6 +179,53 @@ test('composer strip shows 2 percent segments by default and all of them for an 
   assert.match(textOf(single), /30%/)
   storage.set('dsh-cost-meter.windowPick', '{not json')
   assert.equal(countClass(strip(), 'cm-qseg'), 2, 'corrupt storage falls back to the default cap')
+})
+
+test('a browser storage denial still renders the plan card and the strip', () => {
+  // Regression (I1): with storage disabled the browser can throw while obtaining
+  // window.localStorage itself. The picker helpers must fail open inside the render path instead of
+  // aborting the sidebar card and the composer strip.
+  const { module, storage, render, setStorageDenied } = environment()
+  const state = baseState({
+    locale: 'en',
+    quotaStrip: { enabled: true, budget: false, go: false, plans: true },
+    codingPlans: { anthropic: { enabled: true, display: 'both' } },
+  }, {
+    anthropic: { status: 'ok', fetchedAt: 0, windows: {
+      fiveHour: { percent: 10, resetsAt: '' }, weekly: { percent: 20, resetsAt: '' }, monthly: { percent: 30, resetsAt: '' },
+    } },
+  })
+  storage.set('dsh-cost-meter.windowPick', JSON.stringify({ anthropic: 'weekly' }))
+  const card = () => render(module.test.CodingPlanBox, { id: 'anthropic', state, wide: true })
+  const strip = () => render(module.test.QuotaStrip, { useCost: pick => pick({ state }) })
+  // Control: with a readable storage the stored pick is honoured (so the denial below is causal).
+  assert.deepEqual(rowKeys(card()), ['weekly'], 'the stored pick is honoured while storage works')
+  assert.equal(countClass(strip(), 'cm-qseg'), 1)
+  setStorageDenied(true)
+  assert.deepEqual(rowKeys(card()), ['fiveHour', 'weekly', 'monthly'], 'a denied storage renders every window instead of throwing')
+  assert.equal(countClass(strip(), 'cm-qseg'), 2, 'the strip falls back to its default 2-segment cap')
+  setStorageDenied(false)
+  assert.deepEqual(rowKeys(card()), ['weekly'], 'restoring storage restores the stored pick')
+  // The denied reads never clobbered the persisted value: the stored pick is still what it was.
+  assert.equal(JSON.parse(storage.get('dsh-cost-meter.windowPick')).anthropic, 'weekly')
+})
+
+test('the harness reuses hook positions across re-renders', () => {
+  // Harness truth check (M1): a mount must reset the hook cursor per render, as React does per
+  // component render, or state written through a setter is lost on the next render.
+  const { module, mount } = environment()
+  const probe = mount(module.test.__harnessHookProbe, {})
+  assert.equal(probe.tree.count, 0, 'first render starts at the initial state')
+  assert.equal(probe.tree.label, 'probe-label', 'the second hook keeps its own slot')
+  probe.tree.bump()
+  const second = probe.render()
+  assert.equal(second.count, 1, 'a state update survives the re-render')
+  assert.equal(second.label, 'probe-label', 'the second hook is not shadowed by the first')
+  assert.equal(probe.slots.length, 2, 'a re-render allocates no new hook slots')
+  second.bump()
+  probe.render().bump()
+  assert.equal(probe.render().count, 3, 'later re-renders keep counting in the same slots')
+  assert.equal(probe.slots.length, 2, 'still exactly the two probe hooks after four renders')
 })
 
 test('text-only windows render the Chinese balance prefix in the active locale', () => {

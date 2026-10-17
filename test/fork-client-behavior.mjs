@@ -47,12 +47,29 @@ function constLiteral(source, name) {
   return match[0]
 }
 const evalFns = (source, names) => new Function(`${source}\nreturn { ${names.join(', ')} }`)()
+/** Same extraction, but with a controlled `window` (the helpers resolve window.localStorage). */
+const evalFnsWithWindow = (source, names, windowShim) =>
+  new Function('window', `${source}\nreturn { ${names.join(', ')} }`)(windowShim)
 
 /** localStorage shim: the helpers accept an injected storage in tests, window.localStorage in the app. */
 const mapStorage = map => ({
   getItem: key => (map.has(key) ? map.get(key) : null),
   setItem: (key, value) => map.set(key, String(value)),
 })
+
+/**
+ * A window whose `localStorage` is a throwing PROPERTY GETTER — a browser with storage disabled can
+ * throw when the property itself is obtained, before any getItem/setItem call. `reads` counts how
+ * often the helper actually reached the getter, so the test proves the case is exercised.
+ */
+function deniedStorageWindow() {
+  let reads = 0
+  const shim = {}
+  Object.defineProperty(shim, 'localStorage', {
+    get() { reads += 1; throw new Error('synthetic storage getter denied') },
+  })
+  return { shim, reads: () => reads }
+}
 
 test('window picker selection round-trips through the storage format and filters entries', () => {
   const picker = evalFns(
@@ -86,6 +103,34 @@ test('window picker selection round-trips through the storage format and filters
   assert.equal(picker.windowPickSet('commandcode', 'weekly', { getItem() { throw new Error('denied') }, setItem() { throw new Error('denied') } }), undefined, 'storage denial is swallowed')
   const lockedStorage = { getItem() { throw new Error('denied') }, setItem() { throw new Error('denied') } }
   assert.deepEqual(picker.windowPickEntries(entries, 'commandcode', lockedStorage), entries, 'unreadable storage renders every window')
+})
+
+test('a throwing localStorage property getter cannot escape the picker helpers', () => {
+  // Regression (I1): the helpers used to default `storage = window.localStorage` in their parameter
+  // list, so the getter ran OUTSIDE the guard and a SecurityError escaped into the render path. The
+  // canonical helpers — and these again — obtain window.localStorage inside `try`. The throwing case
+  // above (methods that throw) cannot observe this: the property getter has to throw.
+  const names = ['windowPickOf', 'windowPickSet', 'windowPickEntries']
+  const source = [constLiteral(clientSource, 'windowPickKey'), ...names.map(fn)].join('\n')
+  const denied = deniedStorageWindow()
+  const picker = evalFnsWithWindow(source, names, denied.shim)
+  const entries = [['fiveHour', {}], ['weekly', {}]]
+  assert.equal(picker.windowPickOf('anthropic'), null, 'an unreadable property getter = default pick')
+  assert.equal(picker.windowPickSet('anthropic', 'weekly'), undefined, 'a denied write is swallowed')
+  assert.deepEqual(picker.windowPickEntries(entries, 'anthropic'), entries, 'the entries path catches the getter through windowPickOf')
+  assert.ok(denied.reads() > 0, 'the throwing property getter was actually reached (the case is causal)')
+  // Preserved seam and fallbacks: an injected storage bypasses window.localStorage entirely, and an
+  // explicitly broken/invalid storage still fails open.
+  const before = denied.reads()
+  const map = new Map()
+  const storage = mapStorage(map)
+  assert.equal(picker.windowPickOf('anthropic', storage), null)
+  picker.windowPickSet('anthropic', 'weekly', storage)
+  assert.equal(map.get('dsh-cost-meter.windowPick'), '{"anthropic":"weekly"}', 'the injected storage still round-trips')
+  assert.deepEqual(picker.windowPickEntries(entries, 'anthropic', storage), [['weekly', {}]])
+  assert.equal(denied.reads(), before, 'an injected storage never touches window.localStorage')
+  assert.equal(picker.windowPickOf('anthropic', null), null, 'a broken injected storage fails open')
+  assert.deepEqual(picker.windowPickEntries(entries, 'anthropic', null), entries)
 })
 
 test('text windows render the balance prefix in the active locale', () => {

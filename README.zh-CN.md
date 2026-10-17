@@ -389,8 +389,14 @@ dsh plugin --profile web remove dsh-cost-meter  # 卸载
 ```sh
 git clone https://github.com/Subin-Gurung49/dsh-cost-meter.git
 cd <克隆目录的父目录>
-dsh plugin --profile web add link:./dsh-cost-meter  # 符号链接,改 lib/client.js 后刷新页面即生效
+dsh plugin --profile web add link:./dsh-cost-meter  # 符号链接;改浏览器端源码后重新构建再刷新
 ```
+
+浏览器端 `lib/client.js` 是**生成产物**:可读源码是按序号拼接的 `src/client/*.js` 片段。改完这些
+片段后运行 `node scripts/build.mjs`(需先装好开发依赖,见下文「开发与验证」)重新生成并提交
+`lib/client.js`,再刷新页面。**不要手改 `lib/client.js`**——下一次构建会覆盖。`lib/` 下手写的宿主
+模块(`lib/index.js`、`lib/store.js`、`lib/pricing.js`、`lib/typert.host.js` 等)不是生成产物,
+仍可直接编辑。
 
 ## 计费规则
 

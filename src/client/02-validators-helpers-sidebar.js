@@ -2602,10 +2602,13 @@
 
     const windowPickKey = 'dsh-cost-meter.windowPick'
 
+    // 默认存储必须在 try 内解析(不是参数默认值):禁用存储的浏览器连 `window.localStorage` 属性
+    // 本身都会抛 SecurityError(不只是 getItem 调用)。显式传入的 storage 原样使用(测试注入缝保留)。
     /** 解析单家厂商已保存的窗口显示选择:null(默认)| 'all' | 非空窗口键数组。 */
-    function windowPickOf(planId, storage = window.localStorage) {
+    function windowPickOf(planId, storage) {
       try {
-        const raw = storage.getItem(windowPickKey)
+        const store = storage === undefined ? window.localStorage : storage
+        const raw = store.getItem(windowPickKey)
         if (!raw) return null
         const all = JSON.parse(raw)
         const value = all?.[planId]
@@ -2621,9 +2624,10 @@
     }
 
     /** 写入单家的窗口选择:null/undefined 删除该键;其余按既有持久化字符串('all' 或 'k1,k2')写入。 */
-    function windowPickSet(planId, selection, storage = window.localStorage) {
+    function windowPickSet(planId, selection, storage) {
       try {
-        const raw = storage.getItem(windowPickKey)
+        const store = storage === undefined ? window.localStorage : storage
+        const raw = store.getItem(windowPickKey)
         let all = {}
         if (raw) {
           try {
@@ -2633,12 +2637,13 @@
         }
         if (selection === null || selection === undefined) delete all[planId]
         else all[planId] = selection
-        storage.setItem(windowPickKey, JSON.stringify(all))
+        store.setItem(windowPickKey, JSON.stringify(all))
       } catch {}
     }
 
     /** 按已保存的选择过滤窗口条目:未选择/全选 → 原样;未知键丢弃,选择为空 → 原样(回退默认)。 */
-    function windowPickEntries(entries, planId, storage = window.localStorage) {
+    function windowPickEntries(entries, planId, storage) {
+      // 默认存储由 windowPickOf 在自身 try 内解析:getter 抛错时这里同样落到「全部窗口」回退。
       const pick = windowPickOf(planId, storage)
       if (pick === null || pick === 'all') return entries
       const byKey = new Map(entries)

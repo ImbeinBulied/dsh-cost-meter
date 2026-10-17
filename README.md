@@ -389,8 +389,15 @@ Installation errors and plugins still disabled after reinstall: see [troubleshoo
 ```sh
 git clone https://github.com/Subin-Gurung49/dsh-cost-meter.git
 cd <parent directory of the clone>
-dsh plugin --profile web add link:./dsh-cost-meter  # symlink; edit lib/client.js, refresh the page, done
+dsh plugin --profile web add link:./dsh-cost-meter  # symlink; edit the browser sources, rebuild, refresh
 ```
+
+The browser bundle `lib/client.js` is **generated**: the readable sources are the ordered fragments
+`src/client/*.js`. Edit those fragments, then run `node scripts/build.mjs` (needs the dev
+dependencies, see [Development & verification](#development--verification)) to rebuild the committed
+`lib/client.js`, and refresh the page. Never hand-edit `lib/client.js` — the next build would
+discard the change. The handwritten host modules under `lib/` (`lib/index.js`, `lib/store.js`,
+`lib/pricing.js`, `lib/typert.host.js`, …) are not generated and stay editable directly.
 
 ## Billing rules
 

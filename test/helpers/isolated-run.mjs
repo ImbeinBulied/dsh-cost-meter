@@ -15,7 +15,11 @@
 import { cleanSyntheticRoot, isGeneratedRoot, applySyntheticEnv, KEYS, MARKER } from './synthetic-env.mjs'
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', '[::1]', 'localhost'])
-const CREDENTIAL_ENV = /^(?:GH_|GITHUB_|GLAB_)|(?:_TOKEN|_KEY|_SECRET|_PASSWORD|_COOKIE|_AUTH)$/u
+// Credential-shaped env NAMES (names only; values are never read or printed). The suffix set must
+// cover every name the product actually resolves — `lib/coding-plans.js` credentialEnvs /
+// credentialEnvsSecret include the volcengine AK/SK aliases VOLC_ACCESSKEY, VOLC_SECRETKEY,
+// VOLCENGINE_ACCESS_KEY_ID and ARK_ACCESS_KEY_ID, which a bare `_KEY`/`_SECRET` suffix misses.
+const CREDENTIAL_ENV = /^(?:GH_|GITHUB_|GLAB_)|(?:_TOKEN|_KEY|_SECRET|_PASSWORD|_COOKIE|_AUTH|ACCESSKEY|SECRETKEY|ACCESS_KEY_ID)$/u
 
 if (!isGeneratedRoot(process.env[MARKER])) {
   const root = applySyntheticEnv()

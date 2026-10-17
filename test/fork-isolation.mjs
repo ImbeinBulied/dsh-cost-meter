@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -27,6 +27,23 @@ const KEEP_NAME = 'DSH_TEST_ISOLATION_SENTINEL'
 const KEEP_VALUE = 'dsh-fork-isolation-keep-probe'
 const HOSTILE_PROFILE = join(tmpdir(), 'dsh-hostile-userprofile-synthetic', 'windows-home')
 const HOSTILE_MARKER = join(tmpdir(), 'dsh-hostile-inherited-marker-synthetic')
+
+/**
+ * The credential env NAMES the product actually reads, extracted from the shipped provider table
+ * (`lib/coding-plans.js` `credentialEnvs` / `credentialEnvsSecret`). NO values are read: the array
+ * only supplies names, so the probe below can inject explicitly synthetic values for each.
+ */
+function supportedCredentialNames() {
+  const source = readFileSync(resolve(HERE, '..', 'lib', 'coding-plans.js'), 'utf8')
+  const names = [...source.matchAll(/credentialEnvs(?:Secret)?: \[([^\]]*)\]/gu)]
+    .flatMap(match => [...match[1].matchAll(/'([A-Z0-9_]+)'/gu)].map(name => name[1]))
+  return [...new Set(names)].sort()
+}
+const SUPPORTED_CREDENTIAL_NAMES = supportedCredentialNames()
+/** Every probe value is generated here and clearly synthetic; no ambient value is ever inspected. */
+const SYNTHETIC_CREDENTIAL_PREFIX = 'dsh-fork-synthetic-credential-'
+const CREDENTIAL_PROBES = SUPPORTED_CREDENTIAL_NAMES.map((name, index) => [name, SYNTHETIC_CREDENTIAL_PREFIX + index])
+const credentialProbeEnv = Object.fromEntries(CREDENTIAL_PROBES)
 
 /** Run a child and return its single JSON line; the child environment is exactly what is passed. */
 function childJson(source, env) {
@@ -49,6 +66,9 @@ import { join } from 'node:path'
 const keys = {
 ${KEYS.map(key => `  ${JSON.stringify(key)}: process.env[${JSON.stringify(key)}] ?? null,`).join('\n')}
 }
+// Names only, and only for the synthetic list the parent injected: this child never inspects any
+// value it did not generate itself.
+const credentialProbes = ${JSON.stringify(CREDENTIAL_PROBES)}
 const elsewhere = mkdtempSync(join(tmpdir(), 'dsh-fork-cwd-'))
 let relocated = null
 try {
@@ -68,6 +88,8 @@ console.log(JSON.stringify({
   credentialNamePresent: '${CREDENTIAL_NAME}' in process.env,
   credentialValuePresent: process.env['${CREDENTIAL_NAME}'] === '${CREDENTIAL_VALUE}',
   keepNamePresent: process.env['${KEEP_NAME}'] === '${KEEP_VALUE}',
+  supportedCredentialNamesPresent: credentialProbes.filter(([name]) => name in process.env).map(([name]) => name),
+  supportedCredentialValuesPresent: credentialProbes.filter(([name, value]) => process.env[name] === value).map(([name]) => name),
   keys,
   relocated,
 }))`
@@ -80,6 +102,7 @@ test('preload redirects HOME/USERPROFILE before any child module loads, even whe
     USERPROFILE: HOSTILE_PROFILE,
     [CREDENTIAL_NAME]: CREDENTIAL_VALUE,
     [KEEP_NAME]: KEEP_VALUE,
+    ...credentialProbeEnv,
   }))
   const root = fresh.marker
   assert.ok(root && generatedRootPath(root), `preload created a generated root, got ${root}`)
@@ -98,6 +121,16 @@ test('preload redirects HOME/USERPROFILE before any child module loads, even whe
   // cannot satisfy the assertion).
   assert.equal(fresh.credentialNamePresent, false, `${CREDENTIAL_NAME} name absent after preload`)
   assert.equal(fresh.credentialValuePresent, false, `${CREDENTIAL_NAME} value gone with the name`)
+  // Every supported provider credential NAME (lib/coding-plans.js) must be gone too, with its
+  // synthetic value, before any child module could resolve it. The Volcengine AK/SK aliases are the
+  // ones the suffix heuristic used to miss; they are asserted as present in the shipped table so
+  // this probe fails loudly if that set ever changes.
+  assert.ok(SUPPORTED_CREDENTIAL_NAMES.length >= 20, `supported credential names were extracted (${SUPPORTED_CREDENTIAL_NAMES.length})`)
+  for (const name of ['VOLC_ACCESSKEY', 'VOLC_SECRETKEY', 'VOLCENGINE_ACCESS_KEY_ID', 'ARK_ACCESS_KEY_ID']) {
+    assert.ok(SUPPORTED_CREDENTIAL_NAMES.includes(name), `${name} is a supported credential name in lib/coding-plans.js`)
+  }
+  assert.deepEqual(fresh.supportedCredentialNamesPresent, [], 'no supported credential name survives the preload')
+  assert.deepEqual(fresh.supportedCredentialValuesPresent, [], 'no supported credential value survives the preload')
   assert.equal(fresh.keepNamePresent, true, `${KEEP_NAME} non-credential sentinel survived (env not wholesale-dropped)`)
 
   // A live child's own children (a) reuse the root instead of making a second one, and
