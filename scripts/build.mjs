@@ -11,6 +11,9 @@
 //
 // DSH STORE 自动审核对固定 Commit 内每个源码文件设 256 KiB(262,144 字节)单文件
 // 上限,片段与压缩产物双双受检,任一超限即失败(不得靠跳过未读源码通过审核)。
+// Fork 例外(Git-only 分发,见 README「Distribution & size note (fork)」):生成的
+// lib/client.js 主产物改用 294,912 字节上限,由 scripts/size-policy.mjs 与
+// test/verify.mjs 共用同一失败条件;片段与 chunk 产物仍守 262,144 不变。
 
 import { readFileSync, writeFileSync, readdirSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
@@ -19,6 +22,7 @@ import { transform } from 'esbuild'
 import { runInNewContext } from 'node:vm'
 import assert from 'node:assert/strict'
 import { javascriptLiteral } from './javascript-literal.mjs'
+import { checkMainBundle, checkSourceFile, MAIN_BUNDLE_LIMIT } from './size-policy.mjs'
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -36,9 +40,9 @@ if (unexpected.length > 0) {
 }
 for (const name of fragments) {
   // 与 DSH STORE 审核同口径:UTF-8 字节,中文文案算多字节。
-  const bytes = Buffer.byteLength(readFileSync(resolve(clientDir, name), 'utf8'), 'utf8')
-  if (bytes > 262144) {
-    console.error(`✗ src/client/${name} exceeds 262144 bytes (${bytes}) — split the fragment`)
+  const check = checkSourceFile(`src/client/${name}`, Buffer.byteLength(readFileSync(resolve(clientDir, name), 'utf8'), 'utf8'))
+  if (!check.ok) {
+    console.error(`✗ ${check.message} — split the fragment`)
     process.exit(1)
   }
 }
@@ -136,11 +140,12 @@ writeFileSync(outPath, header + result.code)
 // 字节口径与 test/verify.mjs 的门禁一致(UTF-8 字节而非 UTF-16 字符数,中文文案算多字节)。
 const bytes = Buffer.byteLength(header + result.code, 'utf8')
 console.log(`src/client/*.js (${fragments.length} fragments) -> lib/client.js ${bytes} bytes`)
-if (bytes > 262144) {
-  console.error(`✗ lib/client.js still exceeds 262144 bytes (${bytes})`)
+const check = checkMainBundle(bytes)
+if (!check.ok) {
+  console.error(`✗ ${check.message}`)
   process.exit(1)
 }
-console.log('✓ lib/client.js within DSH STORE per-file bound (262144)')
+console.log(`✓ lib/client.js within the fork main-bundle ceiling (${MAIN_BUNDLE_LIMIT})`)
 
 // DSH 0.2.0-rc.2 package-local chunks use the host's require.async contract.
 // Each on-demand screen has readable source and a bounded runtime asset.
@@ -148,7 +153,8 @@ for (const chunk of ['statistics', 'openrouter']) {
   const source = readFileSync(resolve(projectRoot, `src/${chunk}/index.js`), 'utf8')
   const result = await transform(source, { minify: true, target: 'es2022', charset: 'utf8', legalComments: 'none' })
   for (const [name, text] of [[`src/${chunk}/index.js`, source], [`lib/client.${chunk}.js`, result.code]]) {
-    if (Buffer.byteLength(text) > 262144) throw new Error(`${name} exceeds the 262144-byte bound`)
+    const fileCheck = checkSourceFile(name, Buffer.byteLength(text, 'utf8'))
+    if (!fileCheck.ok) throw new Error(fileCheck.message)
   }
   writeFileSync(resolve(projectRoot, `lib/client.${chunk}.js`), result.code)
   console.log(`✓ lib/client.${chunk}.js ${Buffer.byteLength(result.code)} bytes (loaded on demand)`)

@@ -95,6 +95,10 @@ import {
   qwenTokenPlanWindows,
 } from '../lib/coding-plans.js'
 import { extractByRule } from '../lib/custom-balance.js'
+// Fork 主产物例外(Git-only 分发,见 README「Distribution & size note (fork)」):
+// lib/client.js 自 294,912 字节上限起失败,与 scripts/build.mjs 同一失败条件;
+// src/client/*.js 片段与 chunk 产物仍守不变的 262,144 字节 STORE 上限。
+import { checkMainBundle, checkSourceFile } from '../scripts/size-policy.mjs'
 
 // Fixture credentials must never reach live APIs. Tests override this guard with
 // explicit in-process mocks; the optional public pricing smoke is read-only opt-in.
@@ -136,11 +140,15 @@ for (const browserBundle of ['../lib/client.js', '../lib/client.statistics.js', 
   new vm.Script(src, { filename: browserBundle })
 }
 console.log('[ok] 浏览器端 bundle 语法门禁(client.js vm 编译)通过')
-// DSH STORE runtime byte bound: lib/client.js (bounded artifact) must stay < 262144
+// Fork runtime byte ceiling: lib/client.js (bounded artifact) must stay <= 294912.
+// Upstream STORE bound was < 262144; the fork exception is documented in the README and
+// enforced identically by scripts/build.mjs (scripts/size-policy.mjs is the single source).
 {
   const st = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
-  assert.ok(Buffer.byteLength(st, 'utf8') < 262144, 'lib/client.js < 262144 bytes (DSH STORE per-file bound, src -> lib via esbuild)')
-  console.log('[ok] lib/client.js runtime byte bound (<262144) 通过 (' + Buffer.byteLength(st, 'utf8') + ' bytes)')
+  const bytes = Buffer.byteLength(st, 'utf8')
+  const check = checkMainBundle(bytes)
+  assert.ok(check.ok, check.message ?? 'lib/client.js within the fork main-bundle ceiling')
+  console.log('[ok] lib/client.js fork main-bundle ceiling (<=294912) 通过 (' + bytes + ' bytes)')
 }
 
 // DSH STORE 源码侧逐文件上限(v1.7.12,issue #239):固定 Commit 自动审核对仓库内每个
@@ -153,7 +161,8 @@ console.log('[ok] 浏览器端 bundle 语法门禁(client.js vm 编译)通过')
   assert.ok(parts.length > 0, 'src/client/ 源码片段缺失')
   for (const name of parts) {
     const text = readFileSync(new URL(name, dir), 'utf8')
-    assert.ok(Buffer.byteLength(text, 'utf8') <= 262144, `src/client/${name} ≤ 262144 bytes (DSH STORE per-file bound, got ${Buffer.byteLength(text, 'utf8')})`)
+    const sourceCheck = checkSourceFile(`src/client/${name}`, Buffer.byteLength(text, 'utf8'))
+    assert.ok(sourceCheck.ok, `${sourceCheck.message ?? `src/client/${name} ≤ 262144 bytes`} (DSH STORE per-file bound)`)
   }
   console.log('[ok] src/client/ 逐片段字节上限(≤262144)通过(' + parts.length + ' 片)')
 }

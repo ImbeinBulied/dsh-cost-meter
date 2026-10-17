@@ -509,6 +509,17 @@ Check and clear the host search before changing stored data.
 - Plan/API classification is inferred from channel and config; mixed subscription/PAYG usage of one vendor (e.g. Kimi) can be overridden per provider:model in settings.
 - A restart of `dsh web` is required after installing/updating the plugin.
 
+## Distribution & size note (fork)
+
+This fork is distributed Git-only and pinned by full commit; it is not submitted to the DSH
+plugin STORE. Its generated main client bundle (`lib/client.js`) intentionally exceeds the STORE
+review bound of 262,144 bytes, up to a fork ceiling of 294,912 bytes, because it carries nine
+local features. Every other size gate is unchanged: `src/client/*.js` fragments and on-demand
+chunk artifacts keep the 262,144-byte bound, and `node scripts/build.mjs` + `node test/verify.mjs`
+enforce the fork ceiling with the same fail condition. Install:
+
+    dsh plugin --profile web add "github:Subin-Gurung49/dsh-cost-meter#<full-commit-sha>"
+
 ## Update history
 
 A per-version overview and the community-issue resolution log live in [docs/UPDATE-HISTORY.md](docs/UPDATE-HISTORY.md) (中文); the itemized changelog is [CHANGELOG.md](CHANGELOG.md).
