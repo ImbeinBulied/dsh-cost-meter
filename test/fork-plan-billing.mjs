@@ -9,7 +9,7 @@
 // guard and temp ledger files. No profile, credential, session or network surface is touched.
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import fs, { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import fs, { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -365,3 +365,177 @@ function runMigrationBlock(block, ledger, repairLedgerPricing, splitLedgerApiCos
     ledger, fs, repairLedgerPricing, splitLedgerApiCost, { log: () => {} },
   )
 }
+
+// ── Task 6: the requested locale reaches the text windows the host ships as data ──
+//
+// The balance prefixes and the gateway window labels are rendered verbatim by the client (they are
+// data, not i18n keys), so the host must build them in the requested language. These cases call the
+// real parsers, the real `queryCodingPlan`/`queryGatewayQuota` entry points behind a synthetic
+// in-process transport, and the real `apply()` service — no stubbed parser, no test-only seam.
+
+test('balance text windows follow the requested locale and pool knowledge', async () => {
+  const { parseKimiBalance, parseSiliconFlowInfo, parseCommandCodeCredits } = await lib('coding-plans.js')
+  assert.equal(parseKimiBalance({ available_balance: 12345 }, 'en').balance.text, 'Balance ¥123.45')
+  assert.equal(parseKimiBalance({ available_balance: 12345 }, 'zh').balance.text, '余额 ¥123.45')
+  assert.equal(parseKimiBalance({ available_balance: 12345 }).balance.text, '余额 ¥123.45', 'omitted locale keeps the zh default (upstream contract)')
+  assert.equal(parseSiliconFlowInfo({ code: 0, data: { balance: 12.345 } }, 'en').balance.text, 'Balance ¥12.35')
+  assert.equal(parseSiliconFlowInfo({ code: 0, data: { balance: 12.345 } }, 'zh').balance.text, '余额 ¥12.35')
+  assert.equal(parseSiliconFlowInfo({ code: 0, data: { balance: 12.345 } }).balance.text, '余额 ¥12.35', 'omitted locale keeps the zh default (upstream contract)')
+  const knownCaps = { windowLimits: { fiveHour: { cap: 16 }, weekly: { cap: 40 } } }
+  const knownEn = parseCommandCodeCredits({ credits: { monthlyCredits: 38.91 }, ...knownCaps }, 'en')
+  assert.equal(knownEn.balance.text, 'Balance $38.91')          // pool known → monthly % + balance text
+  assert.equal(knownEn.monthly.percent, 51.4)
+  const knownZh = parseCommandCodeCredits({ credits: { monthlyCredits: 38.91 }, ...knownCaps }, 'zh')
+  assert.equal(knownZh.balance.text, '余额 $38.91')
+  const unknownEn = parseCommandCodeCredits({ credits: { monthlyCredits: 5 } }, 'en')
+  assert.equal(unknownEn.monthly.text, 'Balance $5.00')         // unknown caps → text window on monthly
+  assert.equal(unknownEn.balance, undefined)
+  const unknownZh = parseCommandCodeCredits({ credits: { monthlyCredits: 5 } }, 'zh')
+  assert.equal(unknownZh.monthly.text, '余额 $5.00')
+})
+
+test('gateway window labels follow the locale through the parser and a mocked query', async () => {
+  const { parseClaudeUsage, parseCodexUsage } = await lib('gateway-quota-adapters.js')
+  const { queryGatewayQuota, GATEWAY_MANAGEMENT_PATHS } = await lib('gateway-quotas.js')
+
+  // Parser level (real pinned interfaces): labels shipped as data.
+  const claudeEn = parseClaudeUsage({ five_hour: { utilization: 42 } }, { locale: 'en' })
+  assert.equal(claudeEn.windows[0].label, '5h')
+  const claudeZh = parseClaudeUsage({ five_hour: { utilization: 42 } }, { locale: 'zh' })
+  assert.equal(claudeZh.windows[0].label, '5 小时')
+  const codexPayload = { rate_limit: { secondary_window: { used_percent: 34, limit_window_seconds: 604800 } } }
+  assert.equal(parseCodexUsage(codexPayload, { locale: 'en' }).windows[0].label, 'Weekly')
+  assert.equal(parseCodexUsage(codexPayload, { locale: 'zh' }).windows[0].label, '周')
+
+  // Query level (mocked transport; fixture shape from the pinned test/gateway-retry.mjs).
+  const source = { id: 'locale-test', type: 'cliproxyapi', baseURL: 'http://127.0.0.1:8317', enabled: true, display: 'both', includeProviders: ['claude'] }
+  const ctx = { get: () => ({ resolve: async () => ({ value: 'mock-management-key' }) }) }
+  const json = data => new Response(JSON.stringify(data), { status: 200 })
+  const fetchImpl = async url => new URL(url).pathname === GATEWAY_MANAGEMENT_PATHS.authFiles
+    ? json({ auth_files: [{ auth_index: 'test-auth', provider: 'claude' }] })
+    : json({ status_code: 200, body: JSON.stringify({ five_hour: { utilization: 42 } }) })
+  const en = await queryGatewayQuota(ctx, source, { locale: 'en', fetchImpl })
+  assert.equal(en.accounts[0].windows[0].label, '5h')
+  const zh = await queryGatewayQuota(ctx, source, { locale: 'zh', fetchImpl })
+  assert.equal(zh.accounts[0].windows[0].label, '5 小时')
+})
+
+test('every gateway label branch follows the locale and non-en values fall back to zh', async () => {
+  const { parseClaudeUsage, parseCodexUsage } = await lib('gateway-quota-adapters.js')
+  const label = (payload, options) => parseCodexUsage(payload, options).windows[0].label
+  const window = seconds => ({ rate_limit: { primary_window: { used_percent: 10, limit_window_seconds: seconds } } })
+
+  assert.deepEqual(
+    [18000, 604800, 2592000, 10800].map(seconds => label(window(seconds), { locale: 'en' })),
+    ['5h', 'Weekly', 'Monthly', '3h'],
+  )
+  assert.deepEqual(
+    [18000, 604800, 2592000, 10800].map(seconds => label(window(seconds), { locale: 'zh' })),
+    ['5h', '周', '月度', '3 小时'],
+  )
+  // Unlabelled windows fall back to their position; an unknown locale is treated as zh.
+  const fallback = { rate_limit: { primary_window: { used_percent: 10 }, secondary_window: { used_percent: 20 } } }
+  assert.deepEqual(parseCodexUsage(fallback, { locale: 'en' }).windows.map(w => w.label), ['Primary window', 'Secondary window'])
+  assert.deepEqual(parseCodexUsage(fallback).windows.map(w => w.label), ['主窗口', '次窗口'])
+  assert.equal(label(window(604800), { locale: 'fr' }), '周', 'only en selects the English labels')
+  // `locale` must not disturb the other ctx fields.
+  const relative = label({ rate_limit: { primary_window: { used_percent: 10, limit_window_seconds: 604800, reset_after_seconds: 60 } } },
+    { now: () => Date.parse('2026-09-02T00:00:00.000Z'), locale: 'en' })
+  assert.equal(relative, 'Weekly')
+  assert.equal(parseCodexUsage({ rate_limit: { primary_window: { used_percent: 10, limit_window_seconds: 604800, reset_after_seconds: 60 } } },
+    { now: () => Date.parse('2026-09-02T00:00:00.000Z'), locale: 'en' }).windows[0].resetsAt, '2026-09-02T00:01:00.000Z')
+
+  const claudePayload = {
+    five_hour: { utilization: 1 }, seven_day: { utilization: 2 }, seven_day_oauth_apps: { utilization: 3 },
+    seven_day_opus: { utilization: 4 }, seven_day_sonnet: { utilization: 5 }, seven_day_cowork: { utilization: 6 },
+    iguana_necktie: { utilization: 7 },
+  }
+  const pairs = result => result.windows.map(w => `${w.id}=${w.label}`)
+  assert.deepEqual(pairs(parseClaudeUsage(claudePayload, { locale: 'en' })), [
+    'five-hour=5h', 'seven-day=7d', 'seven-day-oauth-apps=7d OAuth Apps', 'seven-day-opus=7d Opus',
+    'seven-day-sonnet=7d Sonnet', 'seven-day-cowork=7d Cowork', 'seven-day-fable=7d Fable',
+  ])
+  assert.deepEqual(pairs(parseClaudeUsage(claudePayload)), [
+    'five-hour=5 小时', 'seven-day=7 天', 'seven-day-oauth-apps=7 天 OAuth Apps', 'seven-day-opus=7 天 Opus',
+    'seven-day-sonnet=7 天 Sonnet', 'seven-day-cowork=7 天 Cowork', 'seven-day-fable=7 天 Fable',
+  ])
+  assert.equal(pairs(parseClaudeUsage(claudePayload, { locale: 'fr' }))[0], 'five-hour=5 小时')
+})
+
+test('queryCodingPlan hands the requested locale to the balance parsers', async () => {
+  const { queryCodingPlan } = await lib('coding-plans.js')
+  const originalFetch = globalThis.fetch          // the fail-closed guard
+  const calls = []
+  globalThis.fetch = async input => {
+    const { pathname } = new URL(String(input))
+    calls.push(pathname)
+    if (pathname.endsWith('/alpha/billing/credits')) {
+      return Response.json({
+        credits: { monthlyCredits: 38.91 },
+        windowLimits: { fiveHour: { used: 1, cap: 16, resetAt: 0 }, weekly: { used: 10, cap: 40, resetAt: 0 } },
+      })
+    }
+    return new Response(null, { status: 404 })     // best-effort period lookup stays unavailable
+  }
+  try {
+    const en = await queryCodingPlan('commandcode', 'cc-test-key', 'en', (_locale, code) => code)
+    assert.equal(en.windows.balance.text, 'Balance $38.91', 'the query result carries the English prefix')
+    const zh = await queryCodingPlan('commandcode', 'cc-test-key', 'zh', (_locale, code) => code)
+    assert.equal(zh.windows.balance.text, '余额 $38.91')
+    assert.equal(calls.filter(path => path.endsWith('/alpha/billing/credits')).length, 2)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('the real host service passes its resolved locale into the gateway query', async () => {
+  const { apply } = await lib('index.js')
+  const work = mkdtempSync(join(tmpdir(), 'dsh-fork-gateway-locale-'))
+  const savedHome = process.env.DSH_HOME
+  const originalFetch = globalThis.fetch          // the fail-closed guard
+  const effects = []
+  const events = new Map()
+  let service
+  try {
+    process.env.DSH_HOME = work
+    const gatewaySource = {
+      id: 'locale-test', type: 'cliproxyapi', label: 'Locale gateway', baseURL: 'http://127.0.0.1:8317',
+      enabled: true, display: 'both', refreshMinutes: 15, includeProviders: ['claude'], allowedHosts: [],
+      allowInsecureHttp: false, antigravityOnlyGemini: false,
+    }
+    mkdirSync(join(work, 'storages', 'cost-meter'), { recursive: true })
+    writeFileSync(join(work, 'storages', 'cost-meter', 'ledger.json'), JSON.stringify({
+      version: 1, days: {}, config: { locale: 'en', gatewayQuotas: { sources: [gatewaySource] } },
+    }))
+    const calls = []
+    globalThis.fetch = async input => {
+      const { pathname } = new URL(String(input))
+      calls.push(pathname)
+      return pathname === '/v0/management/auth-files'
+        ? Response.json({ auth_files: [{ auth_index: 'test-auth', provider: 'claude' }] })
+        : Response.json({ status_code: 200, body: JSON.stringify({ five_hour: { utilization: 42 } }) })
+    }
+    apply({
+      get: name => name === 'credentials' ? { resolve: async () => ({ value: 'mock-management-key', source: 'test' }) } : undefined,
+      provide: (name, value) => { if (name === 'costMeter') service = value },
+      on: (name, fn) => { if (!events.has(name)) events.set(name, new Set()); events.get(name).add(fn); return () => events.get(name)?.delete(fn) },
+      effect: fn => { const cleanup = fn(); if (typeof cleanup === 'function') effects.push(cleanup) },
+      inject() {},
+    })
+    const labelOf = state => state.gatewayQuotas?.[0]?.accounts?.[0]?.windows?.[0]?.label
+    const en = await service.refreshGatewayQuota('locale-test')
+    assert.equal(en.ok, true, 'the mocked management endpoints answer')
+    assert.match(en.message, /refreshed/i, 'the host really is in its English locale')
+    assert.deepEqual(calls, ['/v0/management/auth-files', '/v0/management/api-call'])
+    assert.equal(labelOf(en.state), '5h', 'the configured locale reaches the shipped window label')
+    await service.updateConfig({ locale: 'zh' })
+    const zh = await service.refreshGatewayQuota('locale-test')
+    assert.equal(labelOf(zh.state), '5 小时', 'switching the language relabels the same payload')
+  } finally {
+    for (const dispose of effects.splice(0).reverse()) dispose()
+    globalThis.fetch = originalFetch
+    if (savedHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = savedHome
+    rmSync(work, { recursive: true, force: true })
+  }
+})
