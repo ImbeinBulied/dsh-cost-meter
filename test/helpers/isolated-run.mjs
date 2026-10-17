@@ -3,35 +3,28 @@
 // synthetic environment from their very first import. Idempotent for nested node processes: a
 // validated inherited root is reused and only the creator cleans it up.
 //
+// The root/key plumbing comes from `./synthetic-env.mjs` (same key set, same layout, same marker),
+// so the preload and the in-process fixture cannot drift apart. Only the fetch guards differ on
+// purpose: this preload allows loopback (upstream suites start local servers); the fixture's
+// `failClosedFetch()` allows nothing.
+//
 // Scope: this is NOT an OS/network sandbox. It deletes credential-valued env NAMES (values are
-// never read), redirects HOME/DSH_HOME/XDG_* and blocks `globalThis.fetch` for non-loopback hosts.
-// A suite that bypasses fetch with raw sockets is not covered — inspect for that and report the
-// gap instead of assuming coverage.
-import { mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+// never read), redirects HOME/USERPROFILE/DSH_HOME/XDG_* and blocks `globalThis.fetch` for
+// non-loopback hosts. A suite that bypasses fetch with raw sockets is not covered — inspect for
+// that and report the gap instead of assuming coverage.
+import { cleanSyntheticRoot, isGeneratedRoot, applySyntheticEnv, KEYS, MARKER } from './synthetic-env.mjs'
 
-const KEYS = ['HOME', 'DSH_HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME']
 const LOOPBACK = new Set(['127.0.0.1', '::1', '[::1]', 'localhost'])
 const CREDENTIAL_ENV = /^(?:GH_|GITHUB_|GLAB_)|(?:_TOKEN|_KEY|_SECRET|_PASSWORD|_COOKIE|_AUTH)$/u
-const isGeneratedRoot = path => {
-  try { return statSync(path).isDirectory() && path.startsWith(join(tmpdir(), 'dsh-fork-test-')) } catch { return false }
-}
 
-if (!isGeneratedRoot(process.env.DSH_FORK_TEST_ROOT)) {
-  const root = mkdtempSync(join(tmpdir(), 'dsh-fork-test-'))
-  for (const key of KEYS) {
-    const dir = key === 'HOME' ? root : join(root, key.toLowerCase())
-    mkdirSync(dir, { recursive: true })
-    process.env[key] = dir
-  }
-  process.env.DSH_FORK_TEST_ROOT = root
-  process.once('exit', () => rmSync(root, { recursive: true, force: true }))   // creator cleans up only
+if (!isGeneratedRoot(process.env[MARKER])) {
+  const root = applySyntheticEnv()
+  process.once('exit', () => cleanSyntheticRoot(root))   // creator cleans up only
 }
 // Clear credential-valued env NAMES before any child module can read them (names only; no values
 // are read or printed). DSH_TEST_NODE_MODULES and the synthetic keys stay.
 for (const key of Object.keys(process.env)) {
-  if (key === 'DSH_FORK_TEST_ROOT') continue
+  if (key === MARKER || KEYS.includes(key)) continue
   if (CREDENTIAL_ENV.test(key)) delete process.env[key]
 }
 process.env.DSH_TEST_LIVE_PRICING = '0'   // the pinned verify.mjs opts into live pricing only on '1'
@@ -43,4 +36,9 @@ globalThis.fetch = async (input, init) => {
     throw new Error('external network blocked by fork preload: ' + url.hostname)
   }
   return originalFetch(input, init)   // loopback stays available for the suites' own local servers
+}
+
+// Opt-in only (Task-7-11 evidence wrapper): make a gate log prove its own preload activation.
+if (process.env.DSH_TEST_ISOLATION_TRACE === '1') {
+  console.error(`[fork-preload] synthetic root ${process.env[MARKER]} (HOME/USERPROFILE/DSH_HOME/XDG_* redirected, non-loopback fetch blocked)`)
 }
