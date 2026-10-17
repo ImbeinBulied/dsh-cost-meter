@@ -304,9 +304,9 @@ CLIProxyAPI 网关来源卡片可勾选「只显示 Gemini 额度」，仅影响
 
 ## 安装
 
-> 需求：Node.js ≥ 20 + DeepSeek Harness（带 `dsh plugin` 命令的版本，`npm install -g @deepseek-ai/dsh`）+ **DSH 进程的 PATH 中可找到 pnpm**；通过 npm 包名或插件市场安装也需要 pnpm。下方固定的 pnpm 11 需要 Node.js ≥ 22.13；Node.js 20 可使用 pnpm 10。
+> 需求：Node.js ≥ 20 + DeepSeek Harness（带 `dsh plugin` 命令的版本，`npm install -g @deepseek-ai/dsh`）+ **DSH 进程的 PATH 中可找到 pnpm**（下方 Git 地址安装走 DSH 插件管理器，同样需要 pnpm）。下方固定的 pnpm 11 需要 Node.js ≥ 22.13；Node.js 20 可使用 pnpm 10。
 
-### 一键安装(推荐)
+### 安装(Git 地址，固定完整提交)
 
 **macOS / Linux 首次安装准备：**在启动 DSH 的终端安装 pnpm（Windows 也可执行相同命令）：
 
@@ -317,28 +317,10 @@ pnpm --version
 
 Node.js 20 请改用 `npm install -g pnpm@10`。版本要求见 [pnpm 官方安装说明](https://pnpm.io/installation)。
 
-**npm 包名安装**(已发布到 npm registry,始终跟随最新版本;无需 git):
+**Git 地址安装(唯一受支持的安装方式)**——机器上需已有 pnpm 与 git。本 fork **仅通过 Git 分发**:没有 npm registry 发布、没有一键安装脚本、也没有 tag 打包直链兜底，未提交到 DSH 插件市场（STORE）。完整 40 位 commit sha 可从 fork 的提交历史获取，或在克隆目录执行 `git log -1 --format=%H`:
 
 ```sh
-dsh plugin --profile web add dsh-cost-meter
-```
-
-**PowerShell 一键脚本**(复制整行粘贴回车;自动补齐 pnpm、自动探测 git,无需克隆仓库;安装链**固定到发布 tag `v1.8.20`**,建议先下载审阅再运行):
-
-```powershell
-irm https://raw.githubusercontent.com/Han-1413141/dsh-cost-meter/v1.8.20/install.ps1 | iex
-```
-
-**或直接命令行**(机器上需已有 pnpm 与 git;同样固定到 tag):
-
-```sh
-dsh plugin --profile web add github:Han-1413141/dsh-cost-meter#v1.8.20
-```
-
-没有 git 时可用 GitHub tag 打包直链:
-
-```sh
-dsh plugin --profile web add https://github.com/Han-1413141/dsh-cost-meter/archive/refs/tags/v1.8.20.tar.gz
+dsh plugin --profile web add "github:Subin-Gurung49/dsh-cost-meter#<full-commit-sha>"
 ```
 
 安装后**重启** `dsh web`(插件行、Typert 清单与客户端 bundle 均在启动时扫描):
@@ -349,7 +331,7 @@ dsh web
 
 ### 安装排障：pnpm was not found（macOS / Linux）
 
-报错 `dsh: pnpm was not found; install pnpm and make it available on PATH.` 表示 DSH 无法启动包管理器，此时尚未加载插件。使用 npm 包名安装同样依赖 pnpm。
+报错 `dsh: pnpm was not found; install pnpm and make it available on PATH.` 表示 DSH 无法启动包管理器，此时尚未加载插件。用上方 Git 地址安装同样依赖 pnpm。
 
 完成上方准备后，在启动 DSH 的**同一终端、同一系统用户**下检查：
 
@@ -364,7 +346,7 @@ command -v dsh
 ```sh
 export PATH="$(npm prefix -g)/bin:$PATH"
 pnpm --version
-dsh plugin --profile web add dsh-cost-meter@latest
+dsh plugin --profile web add "github:Subin-Gurung49/dsh-cost-meter#<full-commit-sha>"
 dsh web
 ```
 
@@ -395,7 +377,8 @@ DSH `0.2.0-rc.1` 已通过安装包安装、Web 启动、模块复用、合成�
 ### 更新 / 卸载
 
 ```sh
-# 更新:发布新版后用新版 install.ps1 重跑(脚本内固定版本随之更新)
+# 更新:按新版本的完整 commit sha 重新 add
+dsh plugin --profile web add "github:Subin-Gurung49/dsh-cost-meter#<new-full-commit-sha>"
 dsh plugin --profile web remove dsh-cost-meter  # 卸载
 ```
 
@@ -404,7 +387,7 @@ dsh plugin --profile web remove dsh-cost-meter  # 卸载
 ### 开发者本地调试
 
 ```sh
-git clone https://github.com/Han-1413141/dsh-cost-meter.git
+git clone https://github.com/Subin-Gurung49/dsh-cost-meter.git
 cd <克隆目录的父目录>
 dsh plugin --profile web add link:./dsh-cost-meter  # 符号链接,改 lib/client.js 后刷新页面即生效
 ```
@@ -445,8 +428,7 @@ dsh plugin --profile web add link:./dsh-cost-meter  # 符号链接,改 lib/clien
 ```
 dsh-cost-meter
 ├── cordis.patch.yml        # bundle 补丁:向 web profile 插入 cost-meter 行
-├── install.ps1             # 一键安装/更新脚本(irm … | iex)
-├── .github/workflows/      # CI:install-smoke 一键安装冒烟验证
+├── .github/workflows/      # CI:install-smoke(Git 地址安装冒烟 + fork 回归)
 ├── package.json            # dsh.bundle 补丁声明 + dsh.client 浏览器声明
 └── lib/
     ├── index.js            # 宿主插件:llm/stream 计费包裹、costUsage 会话投影、

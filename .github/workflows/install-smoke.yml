@@ -152,7 +152,7 @@ jobs:
           TEST_REV: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           $env:DSH_HOME = Join-Path $env:RUNNER_TEMP 'dsh-cost-meter-git-install'
-          node .tmp-next-host/node_modules/@deepseek-ai/dsh/lib/bin.js plugin --profile web add "git+https://github.com/han-1413141/dsh-cost-meter.git#$env:TEST_REV"
+          node .tmp-next-host/node_modules/@deepseek-ai/dsh/lib/bin.js plugin --profile web add "git+https://github.com/Subin-Gurung49/dsh-cost-meter.git#$env:TEST_REV"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $config = node .tmp-next-host/node_modules/@deepseek-ai/dsh/lib/bin.js --profile web --dump-config
           if ($LASTEXITCODE -ne 0 -or -not ($config | Select-String 'name: dsh-cost-meter')) { exit 1 }
@@ -233,75 +233,72 @@ jobs:
           node test/typert-source-host.mjs
 
   one-click-install:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            # Windows leg exercises install.ps1 end-to-end, including its
-            # pnpm auto-provisioning (pnpm is deliberately not preinstalled).
-            verify-cmd: pwsh -NoProfile -Command "dsh --profile web --dump-config | Select-String dsh-cost-meter"
-          - os: ubuntu-latest
-            # Linux leg exercises the README installer with the tested commit.
-            verify-cmd: dsh --profile web --dump-config | grep dsh-cost-meter
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: 22
       - name: Install DeepSeek Harness
-        shell: bash
         # Pin the tested host graph: upstream ^0.1.5-rc.1 ranges currently select
         # rc.3 packages requiring an unpublished sidebar-documentpreview@rc.3.
-        # Exercise the real host and install.ps1 without skipping any assertions.
+        # Exercise the real host against the tested commit without skipping any assertions.
         run: |
           mkdir -p .tmp-install-host
           cp test/fixtures/install-host/package.json .tmp-install-host/package.json
           npm install --prefix .tmp-install-host --no-audit --no-fund
           node -e 'require("fs").appendFileSync(process.env.GITHUB_PATH, require("path").resolve(".tmp-install-host/node_modules/.bin") + "\n")'
-      - name: Install pnpm (Linux leg only)
-        if: runner.os == 'Linux'
-        shell: bash
+      - name: Install pnpm
         run: npm install -g pnpm
-      - name: One-click install (Linux leg, tested commit)
-        if: runner.os == 'Linux'
-        shell: bash
+      - name: Git-URL install (tested commit)
+        # 本 job 只保留 Git 地址安装:Windows 的 install.ps1 一键安装分支随 fork 的
+        # Git-only 分发一并删除(脚本已从仓库移除),上游两条安装路由均已改指 fork。
+        # 安装的是本次检出提交(含 PR 合并提交),已发布的版本不能掩盖安装回归。
         env:
           TEST_REV: ${{ github.sha }}
-        run: dsh plugin --profile web add "github:Han-1413141/dsh-cost-meter#$TEST_REV"
-      # Both legs install the checked-out commit, including the PR merge commit.
-      # A previously published tag must not hide an installation regression.
-      - name: One-click install (Windows leg, install.ps1)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          TEST_REV: ${{ github.sha }}
-        run: |
-          Write-Host "[install-smoke] install.ps1 rev: $env:TEST_REV"
-          pwsh -NoProfile -ExecutionPolicy Bypass -File install.ps1 -Rev $env:TEST_REV
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        run: dsh plugin --profile web add "github:Subin-Gurung49/dsh-cost-meter#$TEST_REV"
       - name: Verify plugin joined the bundle graph
-        shell: bash
-        run: ${{ matrix.verify-cmd }}
+        run: dsh --profile web --dump-config | grep dsh-cost-meter
       # 回归与产物门禁需要工作区依赖(zod / dsh-credentials / dsh-home-paths / esbuild):
-      # 本 job 只做安装冒烟、从不装工作区依赖,故回归前按锁文件补装(pnpm v11.21 由
-      # install.ps1 在 Windows leg 供给、上一步在 Linux leg 显式安装)。--frozen-lockfile
+      # 本 job 只做安装冒烟、从不装工作区依赖,故回归前按锁文件补装。--frozen-lockfile
       # 保证 esbuild 与构建已提交 bundle 的 0.28.2 严格一致,产物比对逐字节可复现。
       - name: Install workspace dependencies
-        shell: bash
         run: pnpm install --frozen-lockfile
       # 回归门禁(v1.6.8):CI 此前只验证「能装上」,不验证「算得对」——
       # verify.mjs 回归套件(定价数学/峰谷边界/账本回归/端点白名单)此前完全靠人工执行。
       - name: Run regression suite
-        shell: bash
         run: |
           export DSH_TEST_NODE_MODULES="$PWD/.tmp-install-host/node_modules"
           node test/verify.mjs
           node test/market-hot-install.mjs
-      # 产物漂移门禁(v1.6.8):lib/client.js 是提交进仓库的压缩产物,无 prepare/prepack
+      # 产物漂移门禁(v1.6.8):lib/client.*.js 是提交进仓库的压缩产物,无 prepare/prepack
       # 钩子,全靠手工构建后提交,此前实测已发生漂移。此处重新构建并比对,任何未提交
-      # 的产物差异都会让 CI 变红,杜绝把过期 bundle 发布出去。
-      - name: Check client bundle is in sync with src
-        shell: bash
-        run: node scripts/build.mjs && git diff --exit-code lib/client.js lib/client.statistics.js
+      # 的产物差异都会让 CI 变红,杜绝把过期 bundle 发布出去。三个产物全部比对(主
+      # bundle + statistics / openrouter 按需 chunk),与 fork-regressions 的门禁一致。
+      - name: Check client bundles are in sync with src
+        run: node scripts/build.mjs && git diff --exit-code lib/client.js lib/client.statistics.js lib/client.openrouter.js
+
+  fork-regressions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: corepack pnpm install --frozen-lockfile
+      # 测试隔离由绝对路径 preload 强制:任何子模块加载前重定向 HOME/DSH_HOME/XDG_*/
+      # USERPROFILE、强制 DSH_TEST_LIVE_PRICING=0 并阻断非回环 fetch。
+      # fork-isolation.mjs 是 Task 2 评审补充的隔离回归(凭据名清除 + 保留非凭据名)。
+      - name: Fork behaviour, render and size gates
+        env:
+          NODE_OPTIONS: "--import ${{ github.workspace }}/test/helpers/isolated-run.mjs"
+        run: |
+          node --test test/fork-plan-billing.mjs test/fork-commandcode-period.mjs \
+            test/fork-client-behavior.mjs test/fork-client-render.mjs test/fork-size-policy.mjs \
+            test/fork-isolation.mjs
+      - name: Rebuild-diff (all three generated artifacts)
+        env:
+          NODE_OPTIONS: "--import ${{ github.workspace }}/test/helpers/isolated-run.mjs"
+        run: |
+          node scripts/build.mjs
+          git diff --exit-code lib/client.js lib/client.statistics.js lib/client.openrouter.js

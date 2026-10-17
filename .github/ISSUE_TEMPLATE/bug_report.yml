@@ -30,8 +30,8 @@ body:
     id: version
     attributes:
       label: 插件版本 · Plugin version
-      description: Release tag 或 commit(`git log -1`);一键安装则为 install.ps1 里的 $Rev。
-      placeholder: v1.5.4
+      description: 插件版本;Git 安装请填固定完整 commit sha(`git log -1 --format=%H`,安装地址形如 github:Subin-Gurung49/dsh-cost-meter#<40 位 sha>)。
+      placeholder: 1.8.20-subin.1 / <40 位 commit sha>
     validations:
       required: true
   - type: dropdown
@@ -39,8 +39,8 @@ body:
     attributes:
       label: 安装方式 · Installation
       options:
-        - 一键脚本 install.ps1
-        - dsh plugin add(git/tag)
+        - Git 地址安装(固定完整 commit)
+        - 插件市场 Git 地址安装
         - link 本地目录
         - 其他
     validations:

@@ -304,9 +304,9 @@ Real captures from an actual DSH sidebar of the period strip and collapsed verti
 
 ## Installation
 
-> Requirements: Node.js ≥ 20 + DeepSeek Harness (a version with the `dsh plugin` command; `npm install -g @deepseek-ai/dsh`) + **pnpm on the DSH process's PATH**, including npm-name installs and Plugin Hub installs. Node.js ≥ 22.13 is recommended for the pinned pnpm 11 below; Node.js 20 users can use pnpm 10.
+> Requirements: Node.js ≥ 20 + DeepSeek Harness (a version with the `dsh plugin` command; `npm install -g @deepseek-ai/dsh`) + **pnpm on the DSH process's PATH** (the Git URL install below runs through DSH's plugin manager, which needs pnpm). Node.js ≥ 22.13 is recommended for the pinned pnpm 11 below; Node.js 20 users can use pnpm 10.
 
-### One-click install (recommended)
+### Install (Git URL, pinned to a full commit)
 
 **First-time setup on macOS / Linux:** install pnpm in the terminal you use to start DSH (the same commands also work on Windows):
 
@@ -317,28 +317,10 @@ pnpm --version
 
 On Node.js 20, use `npm install -g pnpm@10` instead. See [pnpm installation and supported Node.js versions](https://pnpm.io/installation).
 
-**npm package name** (published to the npm registry, always tracks the latest version; no git needed):
+**Git URL install (the only supported route)** — the machine must already have pnpm and git. This fork is distributed **Git-only**: it has no npm-registry release, no one-click installer script and no tag-archive fallback, and it is not submitted to the DSH plugin STORE. Take the 40-hex commit sha from the fork's commit history, or from `git log -1 --format=%H` in a clone. See the [Distribution & size note (fork)](#distribution--size-note-fork).
 
 ```sh
-dsh plugin --profile web add dsh-cost-meter
-```
-
-**PowerShell one-click script** (copy the whole line, paste, press Enter; pnpm is provisioned automatically, git is auto-detected — no clone needed; the install chain is **pinned to the release tag `v1.8.20`** — review the script before running):
-
-```powershell
-irm https://raw.githubusercontent.com/Han-1413141/dsh-cost-meter/v1.8.20/install.ps1 | iex
-```
-
-**Or a plain command line** (the machine must already have pnpm and git; also pinned to the tag):
-
-```sh
-dsh plugin --profile web add github:Han-1413141/dsh-cost-meter#v1.8.20
-```
-
-Without git, use the GitHub tag archive:
-
-```sh
-dsh plugin --profile web add https://github.com/Han-1413141/dsh-cost-meter/archive/refs/tags/v1.8.20.tar.gz
+dsh plugin --profile web add "github:Subin-Gurung49/dsh-cost-meter#<full-commit-sha>"
 ```
 
 After installing, **restart** `dsh web` (plugin rows, the Typert manifest and the client bundle are all scanned at startup):
@@ -349,7 +331,7 @@ dsh web
 
 ### Install troubleshooting: pnpm was not found (macOS / Linux)
 
-`dsh: pnpm was not found; install pnpm and make it available on PATH.` means DSH cannot start its package manager; the plugin has not loaded yet. Installing by npm package name still requires pnpm.
+`dsh: pnpm was not found; install pnpm and make it available on PATH.` means DSH cannot start its package manager; the plugin has not loaded yet. Installing through DSH's plugin manager (the Git URL above) still requires pnpm.
 
 After the setup above, check the commands from the **same terminal and OS user** that start DSH:
 
@@ -364,7 +346,7 @@ If npm installed pnpm but the shell cannot find it, add npm's global executable 
 ```sh
 export PATH="$(npm prefix -g)/bin:$PATH"
 pnpm --version
-dsh plugin --profile web add dsh-cost-meter@latest
+dsh plugin --profile web add "github:Subin-Gurung49/dsh-cost-meter#<full-commit-sha>"
 dsh web
 ```
 
@@ -395,7 +377,8 @@ Account-mode balance: in DSH Desktop a signed-in official account is read withou
 ### Update / Uninstall
 
 ```sh
-# update: re-run the new release's install.ps1 (the pinned tag inside it moves with the release)
+# update: re-add the plugin pinned to the new version's full commit sha
+dsh plugin --profile web add "github:Subin-Gurung49/dsh-cost-meter#<new-full-commit-sha>"
 dsh plugin --profile web remove dsh-cost-meter  # uninstall
 ```
 
@@ -404,7 +387,7 @@ Installation errors and plugins still disabled after reinstall: see [troubleshoo
 ### Local development
 
 ```sh
-git clone https://github.com/Han-1413141/dsh-cost-meter.git
+git clone https://github.com/Subin-Gurung49/dsh-cost-meter.git
 cd <parent directory of the clone>
 dsh plugin --profile web add link:./dsh-cost-meter  # symlink; edit lib/client.js, refresh the page, done
 ```
@@ -445,8 +428,7 @@ dsh plugin --profile web add link:./dsh-cost-meter  # symlink; edit lib/client.j
 ```
 dsh-cost-meter
 ├── cordis.patch.yml        # bundle patch: inserts the cost-meter row into the web profile
-├── install.ps1             # one-click install/update script (irm … | iex)
-├── .github/workflows/      # CI: install-smoke for the one-click install path
+├── .github/workflows/      # CI: install-smoke (Git-URL install smoke + fork regressions)
 ├── package.json            # dsh.bundle patch declaration + dsh.client browser declaration
 └── lib/
     ├── index.js            # host plugin: llm/stream billing wrapper, costUsage session
@@ -511,12 +493,13 @@ Check and clear the host search before changing stored data.
 
 ## Distribution & size note (fork)
 
-This fork is distributed Git-only and pinned by full commit; it is not submitted to the DSH
-plugin STORE. Its generated main client bundle (`lib/client.js`) intentionally exceeds the STORE
-review bound of 262,144 bytes, up to a fork ceiling of 294,912 bytes, because it carries nine
-local features. Every other size gate is unchanged: `src/client/*.js` fragments and on-demand
-chunk artifacts keep the 262,144-byte bound, and `node scripts/build.mjs` + `node test/verify.mjs`
-enforce the fork ceiling with the same fail condition. Install:
+This fork is distributed Git-only and pinned by full commit; it has no npm-registry release and
+is not submitted to the DSH plugin STORE. Its generated main client bundle (`lib/client.js`)
+intentionally exceeds the STORE review bound of 262,144 bytes, up to a fork ceiling of 294,912
+bytes, because it carries nine local features. Every other size gate is unchanged:
+`src/client/*.js` fragments and on-demand chunk artifacts keep the 262,144-byte bound, and
+`node scripts/build.mjs` + `node test/verify.mjs` enforce the fork ceiling with the same fail
+condition. Install:
 
     dsh plugin --profile web add "github:Subin-Gurung49/dsh-cost-meter#<full-commit-sha>"
 
