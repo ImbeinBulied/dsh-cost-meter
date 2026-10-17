@@ -4,7 +4,6 @@
 
 - 本仓库是上游 [`Han-1413141/dsh-cost-meter`](https://github.com/Han-1413141/dsh-cost-meter) 的 fork（MIT；历史与署名见 `LICENSE`、`CHANGELOG.md` 与 `docs/release-notes/`），**仅通过 Git 分发**：安装一律使用固定完整提交（40 位 commit sha）的 Git 地址 `github:Subin-Gurung49/dsh-cost-meter#<full-commit-sha>`；不发布 npm 包，也不提交 DSH 插件市场（STORE）。
 - 上游的一键安装脚本与发版脚本（`install.ps1`、`scripts/release.mjs`）已从本仓库移除；本仓库**不保存、不引用、不探测任何 npm / GitHub / 商店凭据或发布令牌**（环境变量、`.npmrc`、注册表均不在本仓库的自动化范围内）。
-- 发布、打 tag、推送远端、创建 release 属于独立的人工审批环节（G3 及以后），由仓库所有者执行；AI 助手不得执行 `git push`、打 tag、创建 release，或调用任何发布/管理 API 写入。
 
 ## 安全约定
 
