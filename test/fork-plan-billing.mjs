@@ -2,7 +2,9 @@
 // Fork behavior pins for the Codex plan/API separation:
 //   - the default classification of the `openai-codex` route (and its `llm-` host wrapper);
 //   - `repairLedgerPricing`'s exact/standardTier options used by the one-time Codex migration;
-//   - the Codex-alias branch of the OpenRouter repair;
+//   - the Codex-alias branch of the OpenRouter repair, including the owner-approved I2/I3
+//     corrections: explicitly API-billed aliases keep their recorded long-context amount, and both
+//     alias spellings must resolve the same effective override key the runtime resolver uses;
 //   - the `openai-codex-plan-reprice-v1` wrapper itself, sliced out of lib/index.js and executed
 //     against real fs + the real repricer (backup-before-write, run-once, backup preservation).
 // Everything runs on synthetic fixtures: a throwaway HOME/DSH_HOME/XDG layout, a fail-closed fetch
@@ -26,9 +28,9 @@ const root = fileURLToPath(new URL('..', import.meta.url))
 const lib = file => import(pathToFileURL(join(root, 'lib', file)).href)
 
 const { billingClassOf, DEFAULT_PLAN_PROVIDER_CLASS, enabledPlanSetOf, planProviderIdOf } = await lib('plan-billing.js')
-const { normalizePrice, providerPriceEntryFor } = await lib('pricing.js')
+const { costOf, normalizePrice, providerPriceEntryFor } = await lib('pricing.js')
 const { defaultConfig, repairLedgerPricing, sanitizeConfig, splitLedgerApiCost } = await lib('store.js')
-const { repairOpenRouterLedger } = await lib('openrouter-pricing.js')
+const { createOpenRouterPriceRefresh, repairOpenRouterLedger } = await lib('openrouter-pricing.js')
 
 const model = 'openai/gpt-6-luna'
 const providerKey = 'openai-codex:gpt-6-luna'
@@ -191,6 +193,343 @@ test('Codex migration wrapper backs up before persisting and stays idempotent on
   runMigrationBlock(block, ledger, repairLedgerPricing, splitLedgerApiCost)
   assert.equal(readFileSync(backupPath, 'utf8'), sentinel, 'existing backup preserved')
   rmSync(dir, { recursive: true, force: true })
+})
+
+// ── Owner-approved I2/I3 corrections (2026-10-17) ──
+//
+// I2: explicitly API-billed Codex aliases must keep their recorded (real) long-context amount; the
+//     standard-tier approximation only serves plan estimates. I3: the alias refresh must resolve the
+//     same effective override key the runtime price resolver uses (`llm-` stripped), so wrapped and
+//     unwrapped routes behave identically and an inactive raw-wrapper-only entry triggers nothing.
+
+const AT_MS = Date.parse('2026-09-25T12:00:00Z')
+const wrapperKey = 'llm-openai-codex:gpt-6-luna'
+const apiKey = 'openai-codex:gpt-6-luna-api'
+const apiModel = 'openai/gpt-6-luna-api'
+const apiOverride = 'openrouter:' + apiModel
+/** One 3M-input-token call: $0.60 at the fixture's long-context rate, $0.30 at the standard rate. */
+const longTokens = { input: 3_000_000, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, calls: 1 }
+const LONG_CONTEXT_COST = 0.6
+const STANDARD_TIER_COST = 0.3
+const API_PROVIDER_CLASS = { providers: { ...DEFAULT_PLAN_PROVIDER_CLASS, 'openai-codex': 'api' } }
+
+const managedPrices = (ids, modelPrice = price) => ({
+  currency: 'USD', models: {}, default: {},
+  providers: { openrouter: { models: Object.fromEntries(ids.map(id => [id, { ...modelPrice }])) } },
+})
+const managedHashes = (ids, modelPrice = price) => Object.fromEntries(ids.map(id => [id, rateFingerprint(modelPrice)]))
+
+/**
+ * Managed alias ledger: every `keys` route records the same long-context aggregate in its daily and
+ * in one session bucket. `planBilling` selects the billing class; `overrides` map the routes to the
+ * managed OpenRouter catalog entries.
+ */
+function managedAliasLedger({
+  keys, models, overrides, planBilling = {}, cost = LONG_CONTEXT_COST, tokens = longTokens,
+  modelPrice = price, migrations = ['pricing-openrouter-v1'],
+}) {
+  const bucket = () => ({ ...tokens, cost, apiCost: cost })
+  const buckets = () => Object.fromEntries(keys.map(key => [key, bucket()]))
+  const total = cost * keys.length
+  return {
+    migrations: [...migrations],
+    openrouterPriceHashes: managedHashes(models, modelPrice),
+    config: {
+      currency: 'USD', exchangeRate: 1, priceMatch: 'auto', priceOverrides: { ...overrides },
+      prices: managedPrices(models, modelPrice),
+      planBilling: { providers: { ...DEFAULT_PLAN_PROVIDER_CLASS }, models: {}, ...planBilling },
+      codingPlans: {}, goQuota: { enabled: false }, peakEnabled: false,
+      peakEffectiveAt: '2026-08-01T00:00:00Z', peakWindows: [],
+    },
+    days: {
+      '2026-09-25': {
+        cost: total, apiCost: total, byProviderModel: buckets(),
+        sessions: [{ at: AT_MS, cost: total, apiCost: total, byProviderModel: buckets() }],
+      },
+    },
+  }
+}
+const dayBucketsOf = ledger => ledger.days['2026-09-25'].byProviderModel
+const sessionBucketsOf = ledger => ledger.days['2026-09-25'].sessions[0].byProviderModel
+const runtimeEntryOf = (ledger, modelId) => providerPriceEntryFor('llm-openai-codex', modelId, ledger.config.prices, {
+  mode: 'auto', overrides: ledger.config.priceOverrides,
+})
+
+test('a 300,000-token API long-context record of $0.60 never becomes the $0.30 standard amount', () => {
+  // The receipt shape from the branch review: 300k input tokens, real long-tier $0.60, standard $0.30.
+  const reviewPrice = {
+    cacheHit: 0.01, cacheMiss: 1, output: 5, cacheWrite: 0.125,
+    longContext: { aboveInputTokens: 272_000, cacheHit: 0.02, cacheMiss: 2, output: 10 },
+    billingMode: 'flat', sourceUrl: 'https://openrouter.ai/api/v1/models', checkedAt: '2026-09-24',
+  }
+  const tokens = { input: 300_000, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, calls: 1 }
+  const variants = [
+    ['provider-level API override', API_PROVIDER_CLASS],
+    ['model-level API override', { models: { [providerKey]: 'api' } }],
+  ]
+  for (const [label, planBilling] of variants) {
+    const ledger = managedAliasLedger({
+      keys: [providerKey, wrapperKey], models: [model], overrides: { [providerKey]: priceOverride },
+      planBilling, tokens, modelPrice: reviewPrice,
+    })
+    const runtime = runtimeEntryOf(ledger, 'gpt-6-luna')
+    assert.equal(costOf(tokens, runtime.entry, AT_MS, { enabled: false }), LONG_CONTEXT_COST, `${label}: the real long-context amount`)
+    assert.equal(costOf(tokens, { ...runtime.entry, longContext: undefined }, AT_MS, { enabled: false }), STANDARD_TIER_COST, `${label}: the real standard amount`)
+    const result = repairOpenRouterLedger(ledger)
+    for (const buckets of [dayBucketsOf(ledger), sessionBucketsOf(ledger)]) {
+      for (const key of [providerKey, wrapperKey]) {
+        assert.equal(buckets[key].cost, LONG_CONTEXT_COST, `${label}: ${key} keeps $0.60`)
+        assert.equal(buckets[key].apiCost, LONG_CONTEXT_COST, `${label}: ${key} keeps its $0.60 API spend`)
+      }
+    }
+    assert.equal(result.recostedBuckets, 0, `${label}: the record is not rewritten`)
+    const day = ledger.days['2026-09-25']
+    assert.equal(day.cost, LONG_CONTEXT_COST * 2)
+    assert.equal(day.apiCost, LONG_CONTEXT_COST * 2)
+    assert.equal(day.sessions[0].cost, LONG_CONTEXT_COST * 2)
+    assert.equal(day.sessions[0].apiCost, LONG_CONTEXT_COST * 2)
+  }
+})
+
+test('provider-level API billing keeps the recorded long-context amount through the alias refresh', () => {
+  const ledger = managedAliasLedger({
+    keys: [providerKey, wrapperKey], models: [model],
+    overrides: { [providerKey]: priceOverride }, planBilling: API_PROVIDER_CLASS,
+  })
+  // The $0.60 record is the real long-context price of these tokens, proven by the real resolver.
+  const runtime = runtimeEntryOf(ledger, 'gpt-6-luna')
+  assert.equal(costOf(longTokens, runtime.entry, AT_MS, { enabled: false }), LONG_CONTEXT_COST)
+  const result = repairOpenRouterLedger(ledger)
+  assert.equal(result.recostedBuckets, 0, 'an API-billed alias is not approximated')
+  assert.equal(result.touchedDays, 0)
+  assert.equal(result.touchedSessions, 0)
+  for (const buckets of [dayBucketsOf(ledger), sessionBucketsOf(ledger)]) {
+    for (const key of [providerKey, wrapperKey]) {
+      assert.equal(buckets[key].cost, LONG_CONTEXT_COST, `${key} keeps its recorded API cost`)
+      assert.equal(buckets[key].apiCost, LONG_CONTEXT_COST, `${key} keeps its real API spend`)
+    }
+  }
+  const day = ledger.days['2026-09-25']
+  assert.equal(day.cost, LONG_CONTEXT_COST * 2)
+  assert.equal(day.apiCost, LONG_CONTEXT_COST * 2)
+  assert.equal(day.sessions[0].cost, LONG_CONTEXT_COST * 2)
+  assert.equal(day.sessions[0].apiCost, LONG_CONTEXT_COST * 2)
+})
+
+test('model-level API billing keeps the recorded long-context amount through the alias refresh', () => {
+  // The canonical `openai-codex:` key also classifies the `llm-` wrapper route at runtime.
+  const planBilling = { models: { [providerKey]: 'api' } }
+  const ledger = managedAliasLedger({
+    keys: [providerKey, wrapperKey], models: [model], overrides: { [providerKey]: priceOverride }, planBilling,
+  })
+  const enabled = new Set()
+  assert.equal(billingClassOf(providerKey.slice(0, providerKey.indexOf(':')), 'gpt-6-luna', ledger.config.planBilling, enabled), 'api')
+  assert.equal(billingClassOf('llm-openai-codex', 'gpt-6-luna', ledger.config.planBilling, enabled), 'api')
+  const result = repairOpenRouterLedger(ledger)
+  assert.equal(result.recostedBuckets, 0, 'an API-billed alias is not approximated')
+  for (const buckets of [dayBucketsOf(ledger), sessionBucketsOf(ledger)]) {
+    for (const key of [providerKey, wrapperKey]) {
+      assert.equal(buckets[key].cost, LONG_CONTEXT_COST, `${key} keeps its recorded API cost`)
+      assert.equal(buckets[key].apiCost, LONG_CONTEXT_COST)
+      assert.notEqual(buckets[key].cost, STANDARD_TIER_COST, 'the standard-tier amount never replaces it')
+    }
+  }
+  assert.equal(ledger.days['2026-09-25'].cost, LONG_CONTEXT_COST * 2)
+  assert.equal(ledger.days['2026-09-25'].apiCost, LONG_CONTEXT_COST * 2)
+})
+
+test('the alias refresh still approximates plan estimates while leaving explicit API spend alone', () => {
+  const ledger = managedAliasLedger({
+    keys: [providerKey, apiKey], models: [model, apiModel],
+    overrides: { [providerKey]: priceOverride, [apiKey]: apiOverride },
+    planBilling: { models: { [apiKey]: 'api' } },
+  })
+  const result = repairOpenRouterLedger(ledger)
+  assert.equal(result.recostedBuckets, 2, 'only the daily and session plan-estimate buckets are repriced')
+  assert.equal(result.touchedDays, 1)
+  assert.equal(result.touchedSessions, 1)
+  for (const buckets of [dayBucketsOf(ledger), sessionBucketsOf(ledger)]) {
+    assert.ok(Math.abs(buckets[providerKey].cost - STANDARD_TIER_COST) < 1e-9, 'the plan estimate still reprices at the standard tier')
+    assert.equal(buckets[providerKey].apiCost, 0, 'a plan estimate is not cash spend')
+    assert.equal(buckets[apiKey].cost, LONG_CONTEXT_COST, 'API-billed long-context spend is not approximated')
+    assert.equal(buckets[apiKey].apiCost, LONG_CONTEXT_COST)
+  }
+  const day = ledger.days['2026-09-25']
+  assert.ok(Math.abs(day.cost - (STANDARD_TIER_COST + LONG_CONTEXT_COST)) < 1e-9)
+  assert.ok(Math.abs(day.apiCost - LONG_CONTEXT_COST) < 1e-9)
+  assert.ok(Math.abs(day.sessions[0].cost - (STANDARD_TIER_COST + LONG_CONTEXT_COST)) < 1e-9)
+  assert.ok(Math.abs(day.sessions[0].apiCost - LONG_CONTEXT_COST) < 1e-9)
+})
+
+test('the one-time Codex migration keeps explicit API spend while repricing plan estimates', async () => {
+  const { repairLedgerPricing, splitLedgerApiCost } = await lib('store.js')   // REAL functions, no stubs
+  const block = migrationBlock(readFileSync(join(root, 'lib', 'index.js'), 'utf8'), 'openai-codex-plan-reprice-v1')
+  // Per variant: expected [cost, apiCost] per bucket. A provider-level API class covers every Codex
+  // model, so nothing is a plan estimate there; a model-level API class leaves the sibling estimate.
+  const variants = [
+    ['provider-level API override', API_PROVIDER_CLASS, {
+      [providerKey]: [LONG_CONTEXT_COST, LONG_CONTEXT_COST], [apiKey]: [LONG_CONTEXT_COST, LONG_CONTEXT_COST],
+    }],
+    ['model-level API override', { models: { [apiKey]: 'api' } }, {
+      [providerKey]: [STANDARD_TIER_COST, 0], [apiKey]: [LONG_CONTEXT_COST, LONG_CONTEXT_COST],
+    }],
+  ]
+  for (const [label, planBilling, expected] of variants) {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-fork-migration-a-api-'))
+    const path = join(dir, 'ledger.json')
+    const backupPath = path + '.pre-openai-codex-plan-reprice-v1'
+    const ledger = managedAliasLedger({
+      keys: [apiKey, providerKey], models: [model, apiModel],
+      overrides: { [providerKey]: priceOverride, [apiKey]: apiOverride }, planBilling, migrations: [],
+    })
+    const original = JSON.stringify(ledger)
+    writeFileSync(path, original)
+    ledger.path = path
+    let writes = 0
+    ledger.scheduleWrite = () => {
+      assert.ok(fs.existsSync(backupPath), `${label}: backup must exist before any write`)
+      assert.equal(readFileSync(backupPath, 'utf8'), original, `${label}: backup must hold the pre-migration bytes`)
+      writes += 1
+      writeFileSync(path, JSON.stringify(ledger))
+    }
+    runMigrationBlock(block, ledger, repairLedgerPricing, splitLedgerApiCost)
+    const dayCost = Object.values(expected).reduce((sum, [cost]) => sum + cost, 0)
+    const dayApi = Object.values(expected).reduce((sum, [, apiCost]) => sum + apiCost, 0)
+    for (const buckets of [dayBucketsOf(ledger), sessionBucketsOf(ledger)]) {
+      for (const [key, [cost, apiCost]] of Object.entries(expected)) {
+        assert.equal(buckets[key].cost, cost, `${label}: ${key} cost`)
+        assert.equal(buckets[key].apiCost, apiCost, `${label}: ${key} API spend`)
+      }
+      assert.notEqual(buckets[apiKey].cost, STANDARD_TIER_COST, `${label}: the API record never takes the standard amount`)
+      assert.equal(buckets[apiKey].apiCost, buckets[apiKey].cost, `${label}: the API record stays cash spend`)
+    }
+    const day = ledger.days['2026-09-25']
+    assert.equal(day.cost, dayCost, `${label}: the day total follows the buckets`)
+    assert.equal(day.apiCost, dayApi, `${label}: the day keeps the API share`)
+    assert.equal(day.sessions[0].cost, dayCost, `${label}: the session total follows the buckets`)
+    assert.equal(day.sessions[0].apiCost, dayApi, `${label}: the session keeps the API share`)
+    assert.deepEqual(ledger.migrations, ['openai-codex-plan-reprice-v1'])
+    assert.equal(writes, 1, `${label}: exactly one scheduled write`)
+    assert.match(readFileSync(path, 'utf8'), /"openai-codex-plan-reprice-v1"/)
+    // Run-once: the marker stops the block from touching the persisted amounts again.
+    runMigrationBlock(block, ledger, repairLedgerPricing, splitLedgerApiCost)
+    assert.equal(writes, 1, `${label}: no second write`)
+    assert.equal(dayBucketsOf(ledger)[apiKey].cost, LONG_CONTEXT_COST, `${label}: the API record is still untouched`)
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('wrapped and unwrapped Codex aliases resolve the same effective override as runtime pricing', () => {
+  const ledger = managedAliasLedger({
+    keys: [providerKey, wrapperKey], models: [model], overrides: { [providerKey]: priceOverride },
+  })
+  const runtime = runtimeEntryOf(ledger, 'gpt-6-luna')
+  assert.equal(runtime.priced, true, 'runtime prices the wrapped route through the normalized override')
+  assert.equal(runtime.entry.cacheMiss, price.cacheMiss)
+  const result = repairOpenRouterLedger(ledger)
+  assert.equal(result.recostedBuckets, 4, 'both spellings are refreshed in the day and in the session')
+  for (const buckets of [dayBucketsOf(ledger), sessionBucketsOf(ledger)]) {
+    for (const key of [providerKey, wrapperKey]) {
+      assert.ok(Math.abs(buckets[key].cost - STANDARD_TIER_COST) < 1e-9, `${key} is repriced like its sibling`)
+      assert.equal(buckets[key].apiCost, 0)
+    }
+  }
+  const day = ledger.days['2026-09-25']
+  assert.ok(Math.abs(day.cost - STANDARD_TIER_COST * 2) < 1e-9)
+  assert.equal(day.apiCost, 0)
+  assert.ok(Math.abs(day.sessions[0].cost - STANDARD_TIER_COST * 2) < 1e-9)
+  assert.equal(day.sessions[0].apiCost, 0)
+})
+
+test('an inactive raw-wrapper-only override does not trigger the alias refresh', () => {
+  const ledger = managedAliasLedger({
+    keys: [wrapperKey, providerKey], models: [model], overrides: { [wrapperKey]: priceOverride },
+  })
+  // The route is priced by its own provider table, so only the inactive raw key could make the
+  // refresh treat these buckets as managed OpenRouter aliases.
+  ledger.config.prices.providers['openai-codex'] = { models: { 'gpt-6-luna': { ...price } } }
+  assert.equal(runtimeEntryOf(ledger, 'gpt-6-luna').priced, true, 'runtime prices the route without the inactive raw key')
+  const result = repairOpenRouterLedger(ledger)
+  assert.equal(result.recostedBuckets, 0, 'an entry the runtime ignores must not trigger the refresh')
+  for (const buckets of [dayBucketsOf(ledger), sessionBucketsOf(ledger)]) {
+    for (const key of [wrapperKey, providerKey]) {
+      assert.equal(buckets[key].cost, LONG_CONTEXT_COST, `${key} is left alone`)
+      assert.equal(buckets[key].apiCost, LONG_CONTEXT_COST)
+    }
+  }
+  assert.equal(ledger.days['2026-09-25'].cost, LONG_CONTEXT_COST * 2)
+})
+
+test('manual and unmanaged price targets stay excluded from the alias refresh', () => {
+  // (a) The alias points at an OpenRouter entry the user edited by hand: not a managed target.
+  const edited = managedAliasLedger({ keys: [providerKey], models: [model], overrides: { [providerKey]: priceOverride } })
+  edited.config.prices.providers.openrouter.models[model] = { ...price, cacheMiss: 9 }
+  assert.equal(repairOpenRouterLedger(edited).recostedBuckets, 0)
+  assert.equal(dayBucketsOf(edited)[providerKey].cost, LONG_CONTEXT_COST)
+  // (b) An API-billed alias whose target entry is absent from the catalog is left as recorded.
+  const targetless = managedAliasLedger({
+    keys: [apiKey], models: [apiModel], overrides: { [apiKey]: apiOverride }, planBilling: API_PROVIDER_CLASS,
+  })
+  targetless.config.prices.providers.openrouter.models = {}
+  targetless.openrouterPriceHashes = {}
+  assert.equal(repairOpenRouterLedger(targetless).recostedBuckets, 0)
+  assert.equal(dayBucketsOf(targetless)[apiKey].cost, LONG_CONTEXT_COST)
+  // (c) The zero-cost OpenRouter flat repair keeps its own manual-override guard.
+  const mappedKey = 'openrouter:' + model
+  const mapped = managedAliasLedger({
+    keys: [mappedKey], models: [model], overrides: { [mappedKey]: mappedKey }, cost: 0, migrations: [],
+  })
+  assert.equal(repairOpenRouterLedger(mapped).recostedBuckets, 0)
+  assert.equal(dayBucketsOf(mapped)[mappedKey].cost, 0)
+})
+
+test('the real OpenRouter price refresh keeps explicit API spend and still refreshes plan estimates', async () => {
+  const { Ledger, defaultConfig, sanitizeConfig } = await lib('store.js')
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-fork-refresh-api-'))
+  const ledger = new Ledger(sanitizeConfig(defaultConfig()), {}, join(dir, 'ledger.json'))
+  try {
+    // A ledger that already completed the one-time OpenRouter migration and holds one API-billed and
+    // one plan-estimate Codex alias, both mapped to managed catalog entries.
+    ledger.migrations = ['pricing-openrouter-v1']
+    ledger.config.priceOverrides = { [providerKey]: priceOverride, [apiKey]: apiOverride }
+    ledger.config.prices.providers.openrouter = { models: { [model]: { ...price }, [apiModel]: { ...price } } }
+    ledger.config.planBilling.models[apiKey] = 'api'
+    ledger.openrouterPriceHashes = managedHashes([model, apiModel])
+    const buckets = { [providerKey]: { ...longTokens, cost: LONG_CONTEXT_COST, apiCost: LONG_CONTEXT_COST },
+      [apiKey]: { ...longTokens, cost: LONG_CONTEXT_COST, apiCost: LONG_CONTEXT_COST } }
+    ledger.days['2026-09-25'] = {
+      cost: LONG_CONTEXT_COST * 2, apiCost: LONG_CONTEXT_COST * 2,
+      byProviderModel: structuredClone(buckets),
+      sessions: [{ at: AT_MS, cost: LONG_CONTEXT_COST * 2, apiCost: LONG_CONTEXT_COST * 2, byProviderModel: structuredClone(buckets) }],
+    }
+    const directoryRow = (id, prompt) => ({ id, pricing: { prompt, completion: '0.0000002' } })
+    const controller = createOpenRouterPriceRefresh(ledger, {
+      fetchImpl: async () => Response.json({ data: [directoryRow(model, '0.00000005'), directoryRow(apiModel, '0.00000005')] }),
+    })
+    try {
+      const result = await controller.refresh()
+      assert.equal(result.count, 2, 'both managed catalog entries are refreshed')
+      assert.equal(ledger.config.prices.providers.openrouter.models[model].cacheMiss, 0.05, 'the directory entry landed')
+      assert.ok(ledger.migrations.includes('pricing-openrouter-v1'), 'the migration marker is untouched')
+      const planCost = 3_000_000 * 0.05 / 1_000_000
+      for (const group of [dayBucketsOf(ledger), sessionBucketsOf(ledger)]) {
+        assert.equal(group[providerKey].cost, planCost, 'the plan estimate follows the refreshed catalog')
+        assert.equal(group[providerKey].apiCost, 0)
+        assert.equal(group[apiKey].cost, LONG_CONTEXT_COST, 'the API record keeps its amount through the refresh')
+        assert.equal(group[apiKey].apiCost, LONG_CONTEXT_COST)
+      }
+      const day = ledger.days['2026-09-25']
+      assert.equal(day.cost, planCost + LONG_CONTEXT_COST)
+      assert.equal(day.apiCost, LONG_CONTEXT_COST)
+      assert.equal(day.sessions[0].cost, planCost + LONG_CONTEXT_COST)
+      assert.equal(day.sessions[0].apiCost, LONG_CONTEXT_COST)
+    } finally {
+      controller.dispose()
+    }
+  } finally {
+    ledger.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('Command Code and OpenCode Go routes inherit their enabled plan classifications', () => {
