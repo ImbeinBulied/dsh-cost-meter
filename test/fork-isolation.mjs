@@ -17,11 +17,16 @@ import { failClosedFetch, isGeneratedRoot, KEYS, MARKER, syntheticEnv } from './
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const PRELOAD = join(HERE, 'helpers', 'isolated-run.mjs')
-// Synthetic hostile values: they end in _TOKEN, so the preload's credential-name scrub removes
-// them too — that is the designed behaviour, and the proof below asserts the child cannot see them.
-const HOSTILE_PROFILE = join(tmpdir(), 'dsh-hostile-userprofile-token', 'windows-home')
-const HOSTILE_SENTINEL = 'dsh-fork-isolation-probe-token'
-const HOSTILE_MARKER = join(tmpdir(), 'dsh-hostile-inherited-marker-token')
+// Synthetic marker values for the scrub proof. CREDENTIAL_NAME is deliberately credential-shaped
+// (`*_KEY`) with a synthetic value: the preload must delete the NAME before any child module loads.
+// KEEP_NAME is non-credential-shaped and must survive, so the assertion cannot pass by dropping the
+// whole environment. Neither value is a real credential or real path.
+const CREDENTIAL_NAME = 'ANTHROPIC_API_KEY'
+const CREDENTIAL_VALUE = 'dsh-fork-isolation-credential-probe'
+const KEEP_NAME = 'DSH_TEST_ISOLATION_SENTINEL'
+const KEEP_VALUE = 'dsh-fork-isolation-keep-probe'
+const HOSTILE_PROFILE = join(tmpdir(), 'dsh-hostile-userprofile-synthetic', 'windows-home')
+const HOSTILE_MARKER = join(tmpdir(), 'dsh-hostile-inherited-marker-synthetic')
 
 /** Run a child and return its single JSON line; the child environment is exactly what is passed. */
 function childJson(source, env) {
@@ -60,17 +65,21 @@ try {
 console.log(JSON.stringify({
   marker: process.env['${MARKER}'] ?? null,
   live: process.env.DSH_TEST_LIVE_PRICING ?? null,
-  sentinelScrubbed: !(('${HOSTILE_SENTINEL}'.toUpperCase()) in process.env),
+  credentialNamePresent: '${CREDENTIAL_NAME}' in process.env,
+  credentialValuePresent: process.env['${CREDENTIAL_NAME}'] === '${CREDENTIAL_VALUE}',
+  keepNamePresent: process.env['${KEEP_NAME}'] === '${KEEP_VALUE}',
   keys,
   relocated,
 }))`
 
 test('preload redirects HOME/USERPROFILE before any child module loads, even when inherited hostile', () => {
-  // Fresh root: hostile USERPROFILE must not survive, and every synthetic key must move together.
+  // Fresh root, with a synthetic credential-shaped name and a non-credential sentinel injected:
+  // hostile USERPROFILE must not survive, and every synthetic key must move together.
   const fresh = childJson(PRELOAD_SNAPSHOT, preloadEnv({
     [MARKER]: HOSTILE_MARKER,   // foreign marker must be ignored (this path is not a generated root)
     USERPROFILE: HOSTILE_PROFILE,
-    USERPROFILE_SENTINEL: HOSTILE_SENTINEL,
+    [CREDENTIAL_NAME]: CREDENTIAL_VALUE,
+    [KEEP_NAME]: KEEP_VALUE,
   }))
   const root = fresh.marker
   assert.ok(root && generatedRootPath(root), `preload created a generated root, got ${root}`)
@@ -84,7 +93,12 @@ test('preload redirects HOME/USERPROFILE before any child module loads, even whe
   assert.notEqual(fresh.keys.USERPROFILE, HOSTILE_PROFILE, 'hostile inherited USERPROFILE was not redirected')
   for (const key of KEYS) assert.equal(typeof fresh.keys[key], 'string', `preload set ${key}`)
   assert.equal(fresh.live, '0', 'live pricing forced off for the child')
-  assert.equal(fresh.sentinelScrubbed, true, 'credential-shaped env names are scrubbed from the child')
+  // Credential-name scrub, both directions: the injected credential-shaped NAME is gone before any
+  // child module could read it, while the non-credential sentinel survives (so a wholesale env wipe
+  // cannot satisfy the assertion).
+  assert.equal(fresh.credentialNamePresent, false, `${CREDENTIAL_NAME} name absent after preload`)
+  assert.equal(fresh.credentialValuePresent, false, `${CREDENTIAL_NAME} value gone with the name`)
+  assert.equal(fresh.keepNamePresent, true, `${KEEP_NAME} non-credential sentinel survived (env not wholesale-dropped)`)
 
   // A live child's own children (a) reuse the root instead of making a second one, and
   // (b) keep the synthetic HOME even when their cwd is elsewhere (absolute NODE_OPTIONS).
