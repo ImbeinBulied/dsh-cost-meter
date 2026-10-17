@@ -8,7 +8,7 @@
 
 本会话费用 · 当日费用 · OpenCode Go 订阅额度显示 · 预算与已用百分比 · 官方账户余额 · 自定义 Provider 余额查询(可配任意 HTTP 端点) · 余额三段进度条 · 历史记录 · 峰谷计价时段显示(UTC 01:00–04:00、06:00–10:00 为峰时段;周末与中国法定假日全天按谷价,分别标注) · 峰/谷切换前弹窗与系统通知提醒(位置/提前量/提醒类型可配) · 官方价格一键同步 · 类 Codex Token 用量热图 · 多厂商多模型价格计费(内置 170+ 模型 ID 价格目录与自动匹配) · 主流 Coding Plan 额度查询与显示(Anthropic / Z.ai / MiniMax / Kimi / OpenRouter / SiliconFlow / CommandCode / SCNet / 火山方舟 / 千问 / 小米 MiMo 十一家,含 Volcano Ark AK/SK 签名与 MiMo 控制台 Cookie 查询) · Plan/API 双轨计费(订阅额度与按量金额分离统计,每 1% 额度与满窗的 token/等值金额估算及日/周/月曲线) · 输入框上方额度横条(预算/Go/Coding Plan 用量一条横排显示,可开关)
 
-[![version](https://img.shields.io/badge/version-1.8.20-4176E6)](https://github.com/Han-1413141/dsh-cost-meter)
+[![version](https://img.shields.io/badge/version-1.8.20--subin.1-4176E6)](https://github.com/Subin-Gurung49/dsh-cost-meter)
 
 **v1.8.20** 的“费用明细”默认用一张圆环图汇总全部轨迹步骤的费用占比，逐步图表与单价明细收起。概览中的计费轨迹直接列出每步输入、输出、缓存金额及占比。原有费用构成保留，单次调用还可按需查看输入、回复和工具内容；主页面布局更紧凑，减少页面切换。另补齐网关额度刷新间隔设置。详见[使用说明与界面预览](docs/context-costs-design.md)。
 
@@ -16,7 +16,7 @@
 
 启动报 **Ledger is busy** 且费用卡片消失时，参见[账本锁恢复说明](docs/ledger-lock-recovery.md#简体中文)。
 
-[![npm](https://img.shields.io/npm/v/dsh-cost-meter?label=npm)](https://www.npmjs.com/package/dsh-cost-meter)
+[![npm (upstream)](https://img.shields.io/npm/v/dsh-cost-meter?label=npm%20(upstream))](https://www.npmjs.com/package/dsh-cost-meter)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![dsh](https://img.shields.io/badge/DeepSeek%20Harness-dsh--plugin-4176E6)](https://github.com/deepseek-ai/deepseek-harness)
 [![awesome · DSH plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
@@ -317,7 +317,7 @@ pnpm --version
 
 Node.js 20 请改用 `npm install -g pnpm@10`。版本要求见 [pnpm 官方安装说明](https://pnpm.io/installation)。
 
-**Git 地址安装(唯一受支持的安装方式)**——机器上需已有 pnpm 与 git。本 fork **仅通过 Git 分发**:没有 npm registry 发布、没有一键安装脚本、也没有 tag 打包直链兜底，未提交到 DSH 插件市场（STORE）。完整 40 位 commit sha 可从 fork 的提交历史获取，或在克隆目录执行 `git log -1 --format=%H`:
+**Git 地址安装(唯一受支持的安装方式)**——机器上需已有 pnpm 与 git。本 fork **仅通过 Git 分发**:没有 npm registry 发布、没有一键安装脚本、也没有 tag 打包直链兜底，未提交到 DSH 插件市场（STORE）。包名 `dsh-cost-meter` 保持不变，它是本包的**标识(identity)**;同名 npm registry 发布属于**上游项目**，不是本 fork——安装本 fork 必须使用下面的完整 40 位 commit Git 地址。完整 40 位 commit sha 可从 fork 的提交历史获取，或在克隆目录执行 `git log -1 --format=%H`:
 
 ```sh
 dsh plugin --profile web add "github:Subin-Gurung49/dsh-cost-meter#<full-commit-sha>"
@@ -370,7 +370,7 @@ minimumReleaseAgeExclude:
 
 DSH `0.2.0-rc.1` 已通过安装包安装、Web 启动、模块复用、合成计费、RPC 和完整回归。此前宿主适配验证覆盖 DSH `0.1.2-rc.1`、`0.1.3-alpha.2`、`0.1.5-alpha.1` 的安装、启动、模块复用和卸载；`0.1.3-alpha.1` 在此前核查中无可获取的官方 npm 版本，暂标记为未知。验证环境及边界见[兼容记录](docs/host-compatibility.md)。
 
-如果插件市场仅显示 `diagnostics: .../.plugin-manager/logs/operation-.../pnpm.log`，这行信息无法指出失败的包或命令。请打开所指的 `pnpm.log`，反馈其中第一条实际错误；分享前删去凭据及私人路径。DSH `0.2.0-rc.1` 的 Git 地址和 npm 包名安装已在隔离 Windows 环境通过；特定机器上的失败仍需要该机器的诊断日志。
+如果插件市场仅显示 `diagnostics: .../.plugin-manager/logs/operation-.../pnpm.log`，这行信息无法指出失败的包或命令。请打开所指的 `pnpm.log`，反馈其中第一条实际错误；分享前删去凭据及私人路径。DSH `0.2.0-rc.1` 上，上游的 Git 与 npm 包名安装路由已在隔离 Windows 环境通过；本 fork 仅支持固定完整 commit 的 Git 地址安装(见上方「安装」小节)，特定机器上的失败仍需要该机器的诊断日志。
 
 账号模式余额：DSH 桌面版登录官方账号后无需 API Key，插件直接读取账号钱包；若仍报 HTTP 401，请在「设置 → 费用 → 官方账户余额」保存独立的开放平台 API Key。凭据来源、优先级和存储说明见[余额凭据来源](docs/balance-credentials.md)。
 

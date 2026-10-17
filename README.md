@@ -8,7 +8,7 @@
 
 Per-conversation cost · daily totals · OpenCode Go subscription quota display · budget with usage percentage · official account balance · custom provider balance · balance progress bar · history · peak/off-peak pricing hours display (peak hours UTC 01:00–04:00, 06:00–10:00; weekends and Chinese public holidays are off-peak all day, with separate labels) · pre-switch popup & system-notification alerts for peak/off-peak changes (position / lead time / alert type configurable) · one-click price sync from the official docs · Codex-style token usage heat grid · multi-vendor model pricing (built-in 170+ model-ID catalog with auto-matching) · mainstream Coding Plan quota queries & display (Anthropic / Z.ai / MiniMax / Kimi / OpenRouter / SiliconFlow / CommandCode / SCNet / Volcano Ark / Qwen / Xiaomi MiMo) plan/API dual-track billing (subscription quota vs pay-as-you-go money separated, per-1% & full-window token/equivalent-cost estimates with daily/weekly/monthly curves) · · quota strip above the input box (budget / Go / coding-plan usage in one row, toggleable)
 
-[![version](https://img.shields.io/badge/version-1.8.20-4176E6)](https://github.com/Han-1413141/dsh-cost-meter)
+[![version](https://img.shields.io/badge/version-1.8.20--subin.1-4176E6)](https://github.com/Subin-Gurung49/dsh-cost-meter)
 
 **v1.8.20** opens Cost details with one aggregate donut showing each trajectory step’s share of session costs. Individual step charts and rate tables start collapsed. Overview keeps a compact billing trajectory with input, output, cache costs and total share per step. Existing billing composition remains available, while individual calls can show saved inputs, responses and tool records on demand. The main page requires fewer view changes. Gateway quota cards now expose their refresh interval. See the [guide and preview](docs/context-costs-design.md#english).
 
@@ -16,7 +16,7 @@ Desktop users: follow the [Desktop installation instructions](docs/install-troub
 
 If startup reports **Ledger is busy** and the cost widgets are missing, see [ledger lock recovery](docs/ledger-lock-recovery.md#english).
 
-[![npm](https://img.shields.io/npm/v/dsh-cost-meter?label=npm)](https://www.npmjs.com/package/dsh-cost-meter)
+[![npm (upstream)](https://img.shields.io/npm/v/dsh-cost-meter?label=npm%20(upstream))](https://www.npmjs.com/package/dsh-cost-meter)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![dsh](https://img.shields.io/badge/DeepSeek%20Harness-dsh--plugin-4176E6)](https://github.com/deepseek-ai/deepseek-harness)
 [![awesome · DSH plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
@@ -317,7 +317,7 @@ pnpm --version
 
 On Node.js 20, use `npm install -g pnpm@10` instead. See [pnpm installation and supported Node.js versions](https://pnpm.io/installation).
 
-**Git URL install (the only supported route)** — the machine must already have pnpm and git. This fork is distributed **Git-only**: it has no npm-registry release, no one-click installer script and no tag-archive fallback, and it is not submitted to the DSH plugin STORE. Take the 40-hex commit sha from the fork's commit history, or from `git log -1 --format=%H` in a clone. See the [Distribution & size note (fork)](#distribution--size-note-fork).
+**Git URL install (the only supported route)** — the machine must already have pnpm and git. This fork is distributed **Git-only**: it has no npm-registry release (npm releases under the unchanged package name `dsh-cost-meter` are the upstream project's, not this fork's), no one-click installer script and no tag-archive fallback, and it is not submitted to the DSH plugin STORE. Take the 40-hex commit sha from the fork's commit history, or from `git log -1 --format=%H` in a clone. See the [Distribution & size note (fork)](#distribution--size-note-fork).
 
 ```sh
 dsh plugin --profile web add "github:Subin-Gurung49/dsh-cost-meter#<full-commit-sha>"
@@ -370,7 +370,7 @@ minimumReleaseAgeExclude:
 
 DSH `0.2.0-rc.1` passes packed installation, Web startup, shared-module checks, synthetic billing, RPC and the full regression suite. Earlier host checks cover installation, startup, shared modules and removal on DSH `0.1.2-rc.1`, `0.1.3-alpha.2` and `0.1.5-alpha.1`. `0.1.3-alpha.1` remains unknown because its official npm version was unavailable during the earlier check. See the [compatibility record](docs/host-compatibility.md) for the environment and limits.
 
-If Plugin Hub reports only `diagnostics: .../.plugin-manager/logs/operation-.../pnpm.log`, that line does not identify the failed package or command. Open the named `pnpm.log` and include the first actual error when reporting the failure; remove credentials and private paths before sharing it. Git URL and npm-name installation on DSH `0.2.0-rc.1` are covered by isolated Windows checks, but an individual machine's failure still requires its diagnostic log.
+If Plugin Hub reports only `diagnostics: .../.plugin-manager/logs/operation-.../pnpm.log`, that line does not identify the failed package or command. Open the named `pnpm.log` and include the first actual error when reporting the failure; remove credentials and private paths before sharing it. The upstream Git and npm-name install routes were covered by isolated Windows checks on DSH `0.2.0-rc.1`; this fork supports the pinned Git URL only (see the [Distribution & size note (fork)](#distribution--size-note-fork)), but an individual machine's failure still requires its diagnostic log.
 
 Account-mode balance: in DSH Desktop a signed-in official account is read without any API key; if you still get HTTP 401, save a dedicated Open Platform key under **Settings → Cost → Account balance**. See [credential sources and priority](docs/balance-credentials.md).
 
@@ -493,13 +493,15 @@ Check and clear the host search before changing stored data.
 
 ## Distribution & size note (fork)
 
-This fork is distributed Git-only and pinned by full commit; it has no npm-registry release and
-is not submitted to the DSH plugin STORE. Its generated main client bundle (`lib/client.js`)
-intentionally exceeds the STORE review bound of 262,144 bytes, up to a fork ceiling of 294,912
-bytes, because it carries nine local features. Every other size gate is unchanged:
-`src/client/*.js` fragments and on-demand chunk artifacts keep the 262,144-byte bound, and
-`node scripts/build.mjs` + `node test/verify.mjs` enforce the fork ceiling with the same fail
-condition. Install:
+This fork is distributed Git-only and pinned by full commit; it is not submitted to the DSH
+plugin STORE. The package keeps the unchanged npm name `dsh-cost-meter` as **package identity**
+(its `name` field), but npm-registry releases under that name belong to the **upstream** project,
+not this fork: install this fork only from the full 40-hex Git pin below.
+Its generated main client bundle (`lib/client.js`) intentionally exceeds the STORE review bound of
+262,144 bytes, up to a fork ceiling of 294,912 bytes, because it carries nine local features.
+Every other size gate is unchanged: `src/client/*.js` fragments and on-demand chunk artifacts keep
+the 262,144-byte bound, and `node scripts/build.mjs` + `node test/verify.mjs` enforce the fork
+ceiling with the same fail condition. Install:
 
     dsh plugin --profile web add "github:Subin-Gurung49/dsh-cost-meter#<full-commit-sha>"
 
