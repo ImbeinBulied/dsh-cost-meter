@@ -451,7 +451,9 @@ test('the Go card drives pace/status from the monthly window even when the main 
   assert.match(text, /Daily allowance 3\.3%\/day/, 'pace comes from the monthly window, not the rolling main window')
   assert.ok(!/Daily allowance 9\.0%\/day/.test(text), 'rolling window must not drive pace')
   // Day 29 of the 30-day cycle allows 96.7%, compared with 40% used.
-  assert.match(text.replace(/\s+/g, ' '), /Daily allowance 3\.3%\/day · Under pace by 56\.7%/, 'pace and verdict merge into one row')
+  const paceLines = nodes(render(module.test.GoQuotaBox, { state, wide: true }))
+    .filter(n => n.props?.className === 'cm-bbox-line cm-num' && /Daily allowance|Under pace/.test(textOf(n)))
+  assert.deepEqual(paceLines.map(textOf), ['Daily allowance 3.3%/day', 'Under pace by 56.7%'], 'under-pace verdict renders on its own line')
 })
 
 test('the Codex card renders the Go-style head, bar, reset line and merged pace/verdict', () => {

@@ -2319,11 +2319,7 @@
                 const S = Number.isFinite(R) ? goMonthStart(R) : NaN
                 const paceLine = paceOf(monthly?.percent, S, R)
                 const verdict = paceStatusOf(monthly?.percent, S, R)
-                if (paceLine === null && verdict === null) return null
-                return el('div', { className: 'cm-bbox-line cm-num' },
-                  paceLine,
-                  paceLine !== null && verdict !== null ? ' · ' : null,
-                  verdict === null ? null : verdict.lvl === 'ok' ? verdict.t : el('span', { className: 'cm-verdict ' + verdict.lvl }, verdict.t))
+                return paceRowsOf(paceLine, verdict)
               })())
             : null),
       }
@@ -2610,11 +2606,7 @@
           const S = Number.isFinite(R) ? R - 7 * 864e5 : NaN
           const paceLine = paceOf(view.pct, S, R)
           const verdict = paceStatusOf(view.pct, S, R)
-          if (paceLine === null && verdict === null) return null
-          return el('div', { className: 'cm-bbox-line cm-num' },
-            paceLine,
-            paceLine !== null && verdict !== null ? ' · ' : null,
-            verdict === null ? null : verdict.lvl === 'ok' ? verdict.t : el('span', { className: 'cm-verdict ' + verdict.lvl }, verdict.t))
+          return paceRowsOf(paceLine, verdict)
         })())
       const rail = el('div', { className: 'cm-bbox-rail cm-num' }, view.label === null ? '—' : view.label + '%')
       return el(Tooltip, { label: el('span', { style: { whiteSpace: 'pre-line' } }, detail), side: 'right', delayMs: 300 },
@@ -2719,6 +2711,16 @@
         : { t: 'Over pace by ' + delta.toFixed(1) + '%', lvl: delta >= 5 ? 'over' : 'warn' }
     }
 
+    function paceRowsOf(paceLine, verdict, key) {
+      if (paceLine === null && verdict === null) return null
+      const status = verdict === null ? null : verdict.lvl === 'ok' ? verdict.t : el('span', { className: 'cm-verdict ' + verdict.lvl }, verdict.t)
+      const props = { className: 'cm-bbox-line cm-num', ...(key === undefined ? {} : { key }) }
+      if (verdict?.t.startsWith('Under pace')) return el(Fragment, key === undefined ? null : { key },
+        paceLine === null ? null : el('div', props, paceLine),
+        el('div', props, status))
+      return el('div', props, paceLine, paceLine !== null && verdict !== null ? ' · ' : null, status)
+    }
+
     /** 通用 Coding Plan 侧边栏卡片(issue #31):每窗口一行进度条;文本窗口(余额等)整行文本。 */
     function codingPlanWindowLabel(name, t) {
       if (name === 'fiveHour' || name === '5h') return '5h'
@@ -2775,12 +2777,7 @@
         const R = Date.parse(typeof ccValue?.resetsAt === 'string' ? ccValue.resetsAt : '')
         const paceLine = paceOf(ccPct, S, R)
         const verdict = Number.isFinite(S) && Number.isFinite(R) ? paceStatusOf(ccPct, S, R) : null
-        const paceRow = paceLine !== null || verdict !== null
-          ? el('div', { key: 'p', className: 'cm-bbox-line cm-num' },
-            paceLine,
-            paceLine !== null && verdict !== null ? ' · ' : null,
-            verdict === null ? null : verdict.lvl === 'ok' ? verdict.t : el('span', { className: 'cm-verdict ' + verdict.lvl }, verdict.t))
-          : null
+        const paceRow = paceRowsOf(paceLine, verdict, 'p')
         const lines = []
         if (otherPct) lines.push(el('div', { key: 'o', className: 'cm-bbox-line cm-num' }, otherPct))
         if (otherResets && balance) {
