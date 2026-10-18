@@ -2684,11 +2684,11 @@
     }
 
     // ── 用量速度/进度判定(patch-quota-cards 的 cmPace/cmPaceStatus)──────────────
-    /** Usage pace: remaining percent per day until the reset. The countdown lives on the reset line. */
+    /** Divide the remaining allowance across whole quota days, including today. */
     function paceOf(pct, resetsAtIso, now = Date.now()) {
       const ms = Date.parse(typeof resetsAtIso === 'string' ? resetsAtIso : '') - now
-      if (typeof pct !== 'number' || !Number.isFinite(ms) || ms <= 0) return null
-      return 'Pace ' + ((100 - pct) / (ms / 864e5)).toFixed(1) + '%/day'
+      if (typeof pct !== 'number' || !Number.isFinite(pct) || !Number.isFinite(ms) || ms <= 0) return null
+      return 'Remaining ' + (Math.max(0, 100 - pct) / Math.ceil(ms / 864e5)).toFixed(1) + '%/day'
     }
 
     /** Go monthly cycles reset on the same UTC day next month; clamp when prior month is shorter. */
@@ -2700,10 +2700,12 @@
       return Date.UTC(year, month - 1, day, reset.getUTCHours(), reset.getUTCMinutes(), reset.getUTCSeconds(), reset.getUTCMilliseconds())
     }
 
-    /** Over/under-pace verdict against the real period boundaries; unknown period → null. */
+    /** Compare with the current quota day's full allowance, rather than an hourly target. */
     function paceStatusOf(pct, startMs, endMs, now = Date.now()) {
-      if (typeof pct !== 'number' || !Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs || now < startMs || now >= endMs) return null
-      const delta = pct - 100 * (now - startMs) / (endMs - startMs)
+      if (typeof pct !== 'number' || !Number.isFinite(pct) || !Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs || now < startMs || now >= endMs) return null
+      const days = Math.ceil((endMs - startMs) / 864e5)
+      const today = Math.min(days, Math.floor((now - startMs) / 864e5) + 1)
+      const delta = pct - 100 * today / days
       if (Math.abs(delta) < 0.5) return { t: 'On pace', lvl: 'ok' }
       return delta < 0
         ? { t: 'Under pace by ' + Math.abs(delta).toFixed(1) + '%', lvl: 'ok' }

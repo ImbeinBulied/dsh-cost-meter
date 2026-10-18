@@ -392,8 +392,7 @@ test('the CC card renders the monthly bar with an API-period verdict and no gues
     { locale: 'en', codingPlans: { commandcode: { enabled: true, display: 'sidebar' } } },
     { commandcode: { status: 'ok', fetchedAt: 0, windows } },
   )
-  // Symmetric period around the injected clock (2026-10-01T00:00:00Z): elapsed = 50% exactly,
-  // so pct 40 → "Under pace by 10.0%" with no rounding ambiguity.
+  // The current day gets its full allowance: day 16 of 30 allows 53.3%.
   const monthly = { percent: 40, resetsAt: '2026-10-16T00:00:00.000Z', periodStartAt: '2026-09-16T00:00:00.000Z' }
   const withPeriod = render(module.test.CodingPlanBox, {
     id: 'commandcode', wide: true,
@@ -406,8 +405,8 @@ test('the CC card renders the monthly bar with an API-period verdict and no gues
   const withPeriodText = textOf(withPeriod)
   assert.match(withPeriodText, /40%/, 'monthly bar percent rendered')
   assert.match(withPeriodText, /Balance \$38\.91/, 'balance text window localised')
-  assert.match(withPeriodText, /Pace \d+(\.\d+)?%\/day/, 'pace line rendered')
-  assert.match(withPeriodText, /Under pace by 10\.0%/, 'verdict uses the API period boundaries')
+  assert.match(withPeriodText, /Remaining \d+(\.\d+)?%\/day/, 'pace line rendered')
+  assert.match(withPeriodText, /Under pace by 13\.3%/, 'verdict uses the API period boundaries')
   // The other percent windows are summarised (percent line) and their countdowns merge with the
   // balance text into ONE head row; the monthly reset keeps its own line (15d to 2026-10-16).
   const heads = () => nodes(withPeriod).filter(n => n.props?.className === 'cm-bbox-head')
@@ -423,7 +422,7 @@ test('the CC card renders the monthly bar with an API-period verdict and no gues
   const withoutPeriodText = textOf(withoutPeriod)
   assert.ok(!/pace by/i.test(withoutPeriodText), 'unknown period → no guessed verdict')
   assert.ok(!/NaN|undefined/.test(withoutPeriodText), 'no placeholder text leaks into the card')
-  // 60% against the same half-elapsed period → "Over pace by 10.0%": the verdict leaves the plain
+  // 60% against the current day allowance of 53.3%: the verdict leaves the plain
   // text form and renders the classed span the CSS colours.
   const overPace = render(module.test.CodingPlanBox, {
     id: 'commandcode', wide: true,
@@ -431,7 +430,7 @@ test('the CC card renders the monthly bar with an API-period verdict and no gues
   })
   const verdictSpan = nodes(overPace).find(n => typeof n.props?.className === 'string' && n.props.className.startsWith('cm-verdict '))
   assert.equal(verdictSpan?.props.className, 'cm-verdict over', 'over-pace verdict renders the coloured span')
-  assert.equal(textOf(verdictSpan), 'Over pace by 10.0%')
+  assert.equal(textOf(verdictSpan), 'Over pace by 6.7%')
   assert.equal(nodes(overPace).filter(n => n.props?.className === 'cm-bbox-head').length, 1, 'a balance with no other countdowns stays a plain line, not a merged head row')
 })
 
@@ -449,16 +448,15 @@ test('the Go card drives pace/status from the monthly window even when the main 
     monthly: { percent: 40, resetsAt: '2026-10-03T00:00:00.000Z' },
   }
   const text = textOf(render(module.test.GoQuotaBox, { state, wide: true }))
-  assert.match(text, /Pace 30\.0%\/day/, 'pace comes from the monthly window, not the rolling main window')
-  assert.ok(!/Pace 9\.0%\/day/.test(text), 'rolling window must not drive pace')
-  // 30-day anchor from the monthly reset: elapsed 28/30 → 93.3% expected vs 40% used.
-  assert.match(text.replace(/\s+/g, ' '), /Pace 30\.0%\/day · Under pace by 53\.3%/, 'pace and verdict merge into one row')
+  assert.match(text, /Remaining 30\.0%\/day/, 'pace comes from the monthly window, not the rolling main window')
+  assert.ok(!/Remaining 9\.0%\/day/.test(text), 'rolling window must not drive pace')
+  // Day 29 of the 30-day cycle allows 96.7%, compared with 40% used.
+  assert.match(text.replace(/\s+/g, ' '), /Remaining 30\.0%\/day · Under pace by 56\.7%/, 'pace and verdict merge into one row')
 })
 
 test('the Codex card renders the Go-style head, bar, reset line and merged pace/verdict', () => {
   const { module, render } = environment()
-  // Period start is exactly the injected clock (2026-10-01T00:00:00Z): elapsed = 0%, so pct 20 is
-  // over pace by the full 20.0%. Also pins that a period starting exactly now is accepted.
+  // Day one allows 14.3% of the weekly quota; 20% used is 5.7 points over.
   module.test.setCodexCache({ status: 'ok', fetchedAt: 0, windows: { weekly: { percent: 20, resetsAt: '2026-10-08T00:00:00.000Z' } } })
   const state = baseState({ locale: 'en', codexQuotaEnabled: true }, {})
   const card = render(module.test.CodexPlanBox, { state, wide: true })
@@ -466,7 +464,7 @@ test('the Codex card renders the Go-style head, bar, reset line and merged pace/
   assert.match(text, /ChatGPT \(Codex\) weekly quota/, 'head carries the title')
   assert.match(text, /20%/, 'head carries the used percent')
   assert.match(text, /Resets: .*\(7d 0h left\)/, 'reset line keeps the date plus countdown')
-  assert.match(text.replace(/\s+/g, ' '), /Pace 11\.4%\/day · Over pace by 20\.0%/, 'pace and verdict merge into one row')
+  assert.match(text.replace(/\s+/g, ' '), /Remaining 11\.4%\/day · Over pace by 5\.7%/, 'pace and verdict merge into one row')
   const classes = nodes(card).map(n => n.props?.className).filter(c => typeof c === 'string')
   assert.ok(classes.includes('cm-bbox-bar'), 'Go-style bar is rendered directly')
   assert.ok(classes.includes('cm-verdict over'), 'over-pace verdict renders the coloured span')
