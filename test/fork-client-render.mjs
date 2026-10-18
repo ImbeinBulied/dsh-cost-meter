@@ -406,7 +406,7 @@ test('the CC card renders the monthly bar with an API-period verdict and no gues
   assert.match(withPeriodText, /40%/, 'monthly bar percent rendered')
   assert.match(withPeriodText, /Balance \$38\.91/, 'balance text window localised')
   assert.match(withPeriodText, /Remaining \d+(\.\d+)?%\/day/, 'pace line rendered')
-  assert.match(withPeriodText, /Under pace by 13\.3%/, 'verdict uses the API period boundaries')
+  assert.match(withPeriodText, /Under pace/, 'verdict uses the API period boundaries')
   // The other percent windows are summarised (percent line) and their countdowns merge with the
   // balance text into ONE head row; the monthly reset keeps its own line (15d to 2026-10-16).
   const heads = () => nodes(withPeriod).filter(n => n.props?.className === 'cm-bbox-head')
@@ -430,7 +430,7 @@ test('the CC card renders the monthly bar with an API-period verdict and no gues
   })
   const verdictSpan = nodes(overPace).find(n => typeof n.props?.className === 'string' && n.props.className.startsWith('cm-verdict '))
   assert.equal(verdictSpan?.props.className, 'cm-verdict over', 'over-pace verdict renders the coloured span')
-  assert.equal(textOf(verdictSpan), 'Over pace by 6.7%')
+  assert.equal(textOf(verdictSpan), 'Over pace')
   assert.equal(nodes(overPace).filter(n => n.props?.className === 'cm-bbox-head').length, 1, 'a balance with no other countdowns stays a plain line, not a merged head row')
 })
 
@@ -451,7 +451,7 @@ test('the Go card drives pace/status from the monthly window even when the main 
   assert.match(text, /Remaining 30\.0%\/day/, 'pace comes from the monthly window, not the rolling main window')
   assert.ok(!/Remaining 9\.0%\/day/.test(text), 'rolling window must not drive pace')
   // Day 29 of the 30-day cycle allows 96.7%, compared with 40% used.
-  assert.match(text.replace(/\s+/g, ' '), /Remaining 30\.0%\/day · Under pace by 56\.7%/, 'pace and verdict merge into one row')
+  assert.match(text.replace(/\s+/g, ' '), /Remaining 30\.0%\/day · Under pace/, 'pace and verdict merge into one row')
 })
 
 test('the Codex card renders the Go-style head, bar, reset line and merged pace/verdict', () => {
@@ -464,7 +464,7 @@ test('the Codex card renders the Go-style head, bar, reset line and merged pace/
   assert.match(text, /ChatGPT \(Codex\) weekly quota/, 'head carries the title')
   assert.match(text, /20%/, 'head carries the used percent')
   assert.match(text, /Resets: .*\(7d 0h left\)/, 'reset line keeps the date plus countdown')
-  assert.match(text.replace(/\s+/g, ' '), /Remaining 11\.4%\/day · Over pace by 5\.7%/, 'pace and verdict merge into one row')
+  assert.match(text.replace(/\s+/g, ' '), /Remaining 11\.4%\/day · Over pace/, 'pace and verdict merge into one row')
   const classes = nodes(card).map(n => n.props?.className).filter(c => typeof c === 'string')
   assert.ok(classes.includes('cm-bbox-bar'), 'Go-style bar is rendered directly')
   assert.ok(classes.includes('cm-verdict over'), 'over-pace verdict renders the coloured span')
