@@ -2496,6 +2496,24 @@
       return { weekly: { percent: usedPct, resetsAt } }
     }
 
+    // dsh-plugin-subscriptions exposes quota through the host RPC, without browser credentials.
+    async function querySubscriptionsCodexQuota(rpc) {
+      if (typeof rpc?.call !== 'function') return null
+      const status = await rpc.call('/api', 'subscriptions-auth.status', {})
+      const accounts = status?.ok === true ? status.value?.providers?.codex?.accounts : null
+      if (!Array.isArray(accounts)) return null
+      const account = accounts.find(account => account?.isDefault === true) ?? accounts[0]
+      if (typeof account?.key !== 'string' || !account.key) return null
+      const usage = await rpc.call('/api', 'subscriptions-auth.usage', { provider: 'codex', account: account.key })
+      const windows = usage?.ok === true && usage.value?.supported === true ? usage.value.windows : null
+      const weekly = Array.isArray(windows) ? windows.find(window => window?.kind === 'weekly') : null
+      if (typeof weekly?.usedPercent !== 'number' || !Number.isFinite(weekly.usedPercent)) return null
+      const reset = weekly.resetsAt
+      const resetsAt = typeof reset === 'number' && Number.isFinite(reset) && reset > 0 && reset <= 8.64e15 ? new Date(reset).toISOString() : ''
+      return { weekly: { percent: Math.max(0, Math.min(100, weekly.usedPercent)), resetsAt } }
+    }
+
+    let codexQuotaRpc = null
     const codexQuotaCache = { status: 'idle', windows: {}, fetchedAt: 0, inFlight: null, listeners: [] }
     const subscribeCodexQuota = fn => {
       codexQuotaCache.listeners.push(fn)
@@ -2513,11 +2531,17 @@
       if (!force && codexQuotaCache.fetchedAt > 0 && Date.now() - codexQuotaCache.fetchedAt < 5 * 60_000) return undefined
       const task = (async () => {
         try {
-          const resp = await fetch(CODEX_STATUS_PATH, { credentials: 'same-origin', headers: { accept: 'application/json' }, signal: AbortSignal.timeout(8000) })
           let windows = {}
-          if (resp.ok) {
-            const parsed = parseCodexStatus(await resp.json().catch(() => null))
+          try {
+            const parsed = await querySubscriptionsCodexQuota(codexQuotaRpc)
             if (parsed !== null) windows = parsed
+          } catch { /* Hosts without the subscriptions plugin can use the legacy status route. */ }
+          if (Object.keys(windows).length === 0) {
+            const resp = await fetch(CODEX_STATUS_PATH, { credentials: 'same-origin', headers: { accept: 'application/json' }, signal: AbortSignal.timeout(8000) })
+            if (resp.ok) {
+              const parsed = parseCodexStatus(await resp.json().catch(() => null))
+              if (parsed !== null) windows = parsed
+            }
           }
           codexQuotaCache.status = Object.keys(windows).length > 0 ? 'ok' : 'unavailable'
           codexQuotaCache.windows = windows

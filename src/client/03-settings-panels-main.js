@@ -2743,6 +2743,8 @@
     async function apply(ctx) {
       const remote = ctx.remote
       if (remote === undefined || typeof remote.$mount !== 'function') return
+      try { codexQuotaRpc = ctx.get('connection')?.rpc ?? null } catch { codexQuotaRpc = null }
+      ctx.effect(() => () => { codexQuotaRpc = null }, 'cost-meter: Codex quota connection')
       const unmount = await remote.$mount(CONTRIBUTION)
       ctx.effect(() => () => { unmount() }, 'cost-meter: remote contribution')
       const costMeter = ctx.get('remote.costMeter')

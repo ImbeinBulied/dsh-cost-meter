@@ -293,7 +293,7 @@ jobs:
         env:
           NODE_OPTIONS: "--import ${{ github.workspace }}/test/helpers/isolated-run.mjs"
         run: |
-          node --test test/fork-plan-billing.mjs test/fork-commandcode-period.mjs \
+          node --test test/codex-subscriptions.mjs test/fork-plan-billing.mjs test/fork-commandcode-period.mjs \
             test/fork-client-behavior.mjs test/fork-client-render.mjs test/fork-size-policy.mjs \
             test/fork-isolation.mjs
       - name: Rebuild-diff (all three generated artifacts)
