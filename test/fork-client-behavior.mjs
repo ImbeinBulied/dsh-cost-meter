@@ -173,8 +173,8 @@ test('pace helpers compute the rate and the over/under verdict against an inject
   const { paceOf, goMonthStart, paceStatusOf } = evalFns(['paceOf', 'goMonthStart', 'paceStatusOf'].map(fn).join('\n'), ['paceOf', 'goMonthStart', 'paceStatusOf'])
   const now = Date.parse('2026-10-01T00:00:00Z')
   const end = now + 7 * 864e5
-  assert.equal(paceOf(40, new Date(end).toISOString(), now), 'Remaining 8.6%/day')
-  assert.equal(paceOf(40, '', now), null)
+  assert.equal(paceOf(40, now, end, now), 'Daily allowance 14.3%/day')
+  assert.equal(paceOf(40, now, NaN, now), null)
   assert.equal(goMonthStart(Date.parse('2026-11-10T17:00:10Z')), Date.parse('2026-10-10T17:00:10Z'))
   assert.equal(goMonthStart(Date.parse('2026-03-31T17:00:10Z')), Date.parse('2026-02-28T17:00:10Z'), 'short prior months clamp the cycle day')
   const start = now - 3.5 * 864e5, reset = now + 3.5 * 864e5
@@ -184,12 +184,12 @@ test('pace helpers compute the rate and the over/under verdict against an inject
   assert.deepEqual(paceStatusOf(47.14, start, reset, now), { t: 'Under pace by 10.0%', lvl: 'ok' })
   for (const hours of [0, 6, 12, 23.99]) {
     const clock = now + hours * 3600000
-    assert.equal(paceOf(5, new Date(end).toISOString(), clock), 'Remaining 13.6%/day')
+    assert.equal(paceOf(5, now, end, clock), 'Daily allowance 14.3%/day')
     assert.deepEqual(paceStatusOf(5, now, end, clock), { t: 'Under pace by 9.3%', lvl: 'ok' })
   }
   assert.deepEqual(paceStatusOf(5, now, end, now + 864e5), { t: 'Under pace by 23.6%', lvl: 'ok' })
-  assert.equal(paceOf(5, new Date(end).toISOString(), end - 1000), 'Remaining 95.0%/day')
-  assert.equal(paceOf(5, new Date(end).toISOString(), end), null)
+  assert.equal(paceOf(5, now, end, end - 1000), 'Daily allowance 14.3%/day')
+  assert.equal(paceOf(5, now, end, end), null)
   assert.equal(paceStatusOf(40, undefined, now + 3.5 * 864e5, now), null)
 })
 

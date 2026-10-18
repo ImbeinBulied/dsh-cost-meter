@@ -405,7 +405,7 @@ test('the CC card renders the monthly bar with an API-period verdict and no gues
   const withPeriodText = textOf(withPeriod)
   assert.match(withPeriodText, /40%/, 'monthly bar percent rendered')
   assert.match(withPeriodText, /Balance \$38\.91/, 'balance text window localised')
-  assert.match(withPeriodText, /Remaining \d+(\.\d+)?%\/day/, 'pace line rendered')
+  assert.match(withPeriodText, /Daily allowance \d+(\.\d+)?%\/day/, 'pace line rendered')
   assert.match(withPeriodText, /Under pace by 13\.3%/, 'verdict uses the API period boundaries')
   // The other percent windows are summarised (percent line) and their countdowns merge with the
   // balance text into ONE head row; the monthly reset keeps its own line (15d to 2026-10-16).
@@ -448,10 +448,10 @@ test('the Go card drives pace/status from the monthly window even when the main 
     monthly: { percent: 40, resetsAt: '2026-10-03T00:00:00.000Z' },
   }
   const text = textOf(render(module.test.GoQuotaBox, { state, wide: true }))
-  assert.match(text, /Remaining 30\.0%\/day/, 'pace comes from the monthly window, not the rolling main window')
-  assert.ok(!/Remaining 9\.0%\/day/.test(text), 'rolling window must not drive pace')
+  assert.match(text, /Daily allowance 3\.3%\/day/, 'pace comes from the monthly window, not the rolling main window')
+  assert.ok(!/Daily allowance 9\.0%\/day/.test(text), 'rolling window must not drive pace')
   // Day 29 of the 30-day cycle allows 96.7%, compared with 40% used.
-  assert.match(text.replace(/\s+/g, ' '), /Remaining 30\.0%\/day · Under pace by 56\.7%/, 'pace and verdict merge into one row')
+  assert.match(text.replace(/\s+/g, ' '), /Daily allowance 3\.3%\/day · Under pace by 56\.7%/, 'pace and verdict merge into one row')
 })
 
 test('the Codex card renders the Go-style head, bar, reset line and merged pace/verdict', () => {

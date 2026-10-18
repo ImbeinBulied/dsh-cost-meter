@@ -2315,9 +2315,10 @@
               resets ? el('div', { className: 'cm-bbox-line' }, resets) : null,
               (() => {
                 const monthly = goQuota.monthly ?? null // pinned: the monthly window drives pace/status, not mainKey
-                const paceLine = paceOf(monthly?.percent, monthly?.resetsAt)
                 const R = Date.parse(typeof monthly?.resetsAt === 'string' ? monthly.resetsAt : '')
-                const verdict = Number.isFinite(R) ? paceStatusOf(monthly?.percent, goMonthStart(R), R) : null
+                const S = Number.isFinite(R) ? goMonthStart(R) : NaN
+                const paceLine = paceOf(monthly?.percent, S, R)
+                const verdict = paceStatusOf(monthly?.percent, S, R)
                 if (paceLine === null && verdict === null) return null
                 return el('div', { className: 'cm-bbox-line cm-num' },
                   paceLine,
@@ -2605,9 +2606,10 @@
           el('div', { className: 'cm-bbox-fill', style: { width: simpleBarByDirection(view.pct, direction).width + '%' } })),
         miniMaxResetText(win, t) ? el('div', { className: 'cm-bbox-line' }, miniMaxResetText(win, t)) : null,
         (() => {
-          const paceLine = paceOf(view.pct, win?.resetsAt)
           const R = Date.parse(typeof win?.resetsAt === 'string' ? win.resetsAt : '')
-          const verdict = Number.isFinite(R) ? paceStatusOf(view.pct, R - 7 * 864e5, R) : null
+          const S = Number.isFinite(R) ? R - 7 * 864e5 : NaN
+          const paceLine = paceOf(view.pct, S, R)
+          const verdict = paceStatusOf(view.pct, S, R)
           if (paceLine === null && verdict === null) return null
           return el('div', { className: 'cm-bbox-line cm-num' },
             paceLine,
@@ -2684,11 +2686,16 @@
     }
 
     // ── 用量速度/进度判定(patch-quota-cards 的 cmPace/cmPaceStatus)──────────────
-    /** Divide the remaining allowance across whole quota days, including today. */
-    function paceOf(pct, resetsAtIso, now = Date.now()) {
-      const ms = Date.parse(typeof resetsAtIso === 'string' ? resetsAtIso : '') - now
-      if (typeof pct !== 'number' || !Number.isFinite(pct) || !Number.isFinite(ms) || ms <= 0) return null
-      return 'Remaining ' + (Math.max(0, 100 - pct) / Math.ceil(ms / 864e5)).toFixed(1) + '%/day'
+    /** Keep the normal daily allowance stable; redivide the remainder while over pace. */
+    function paceOf(pct, startMs, endMs, now = Date.now()) {
+      if (typeof pct !== 'number' || !Number.isFinite(pct) || !Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs || now < startMs || now >= endMs) return null
+      const days = Math.ceil((endMs - startMs) / 864e5)
+      const today = Math.min(days, Math.floor((now - startMs) / 864e5) + 1)
+      const over = pct - 100 * today / days >= 0.5
+      const daily = over
+        ? Math.max(0, 100 - pct) / Math.ceil((endMs - now) / 864e5)
+        : 100 / days
+      return (over ? 'Remaining ' : 'Daily allowance ') + daily.toFixed(1) + '%/day'
     }
 
     /** Go monthly cycles reset on the same UTC day next month; clamp when prior month is shorter. */
@@ -2764,9 +2771,9 @@
             const countdown = formatResetCountdown(win?.resetsAt, t)
             return countdown ? codingPlanWindowLabel(name, t) + ' ' + countdown : null
           }).filter(Boolean).join(' · ')
-        const paceLine = paceOf(ccPct, ccValue?.resetsAt)
         const S = Date.parse(typeof ccValue?.periodStartAt === 'string' ? ccValue.periodStartAt : '')
         const R = Date.parse(typeof ccValue?.resetsAt === 'string' ? ccValue.resetsAt : '')
+        const paceLine = paceOf(ccPct, S, R)
         const verdict = Number.isFinite(S) && Number.isFinite(R) ? paceStatusOf(ccPct, S, R) : null
         const paceRow = paceLine !== null || verdict !== null
           ? el('div', { key: 'p', className: 'cm-bbox-line cm-num' },
