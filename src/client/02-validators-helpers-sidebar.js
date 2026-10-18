@@ -2708,8 +2708,8 @@
       const delta = pct - 100 * today / days
       if (Math.abs(delta) < 0.5) return { t: 'On pace', lvl: 'ok' }
       return delta < 0
-        ? { t: 'Under pace', lvl: 'ok' }
-        : { t: 'Over pace', lvl: delta >= 5 ? 'over' : 'warn' }
+        ? { t: 'Under pace by ' + Math.abs(delta).toFixed(1) + '%', lvl: 'ok' }
+        : { t: 'Over pace by ' + delta.toFixed(1) + '%', lvl: delta >= 5 ? 'over' : 'warn' }
     }
 
     /** 通用 Coding Plan 侧边栏卡片(issue #31):每窗口一行进度条;文本窗口(余额等)整行文本。 */
